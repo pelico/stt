@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实时字幕</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500&family=JetBrains+Mono:wght@400&display=swap');
+
+  :root {
+    --bg: #0a0a0a; --surface: #111; --surface-light: #1a1a1a; --border: #222; --accent: #00ff88;
+    --text: #e8e8e8; --text-dim: #555; --danger: #ff4444;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Noto Sans SC', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* 主控制栏 */
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; z-index: 100; flex-wrap: wrap; }
+  .logo { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--accent); letter-spacing: 0.1em; margin-right: 10px; }
+  .spacer { flex: 1; }
+
+  /* 副控制栏 (高级参数) */
+  .sub-header { display: flex; align-items: center; gap: 14px; padding: 8px 24px; border-bottom: 1px solid var(--border); background: var(--surface-light); flex-shrink: 0; z-index: 99; flex-wrap: wrap; }
+
+  .endpoint-wrap { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+  .endpoint-wrap label { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; white-space: nowrap; }
+  .endpoint-wrap input[type="text"] { background: none; border: none; outline: none; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  
+  select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 12px; padding: 6px 10px; outline: none; cursor: pointer; }
+
+  .toggle-wrap { cursor: pointer; user-select: none; }
+  .toggle-wrap input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); width: 14px; height: 14px; margin-right: 4px; vertical-align: middle; }
+  .toggle-wrap label { cursor: pointer; vertical-align: middle; }
+
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); transition: background 0.3s; }
+  .status-dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.5s infinite; }
+  .status-dot.error { background: var(--danger); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .status-text { font-size: 12px; color: var(--accent); font-family: 'JetBrains Mono', monospace; min-width: 90px; text-align: right;}
+
+  .btn { padding: 8px 20px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; transition: all 0.2s; white-space: nowrap; font-weight: 500; }
+  .btn-start { background: var(--accent); color: #000; }
+  .btn-start:hover { filter: brightness(1.1); }
+  .btn-stop { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+  .btn-stop:hover { background: rgba(255,68,68,0.1); }
+
+  main { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+  
+  #subtitle-box { flex: 1; overflow-y: auto; padding: 40px 10% 120px; scroll-behavior: smooth; }
+  #subtitle-box::-webkit-scrollbar { width: 6px; }
+  #subtitle-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  #subtitle-box::-webkit-scrollbar-thumb:hover { background: #444; }
+
+  .subtitle-line { margin-bottom: 24px; display: flex; gap: 16px; align-items: baseline; animation: fadeIn 0.4s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .subtitle-line .ts { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-dim); user-select: none; }
+  .subtitle-line .txt { font-size: 22px; line-height: 1.6; color: var(--text); font-weight: 300; letter-spacing: 0.02em; }
+  .subtitle-line.latest .txt { color: #fff; font-weight: 400; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+  .subtitle-line.pending { opacity: 0.5; }
+  
+  .pending-cursor { display: inline-block; width: 8px; height: 22px; background: var(--accent); opacity: 0.6; margin-left: 6px; vertical-align: bottom; animation: blink 1s infinite; }
+  @keyframes blink { 0%, 100% { opacity: 0; } 50% { opacity: 0.6; } }
+
+  footer { border-top: 1px solid var(--border); background: var(--surface); padding: 10px 24px; display: flex; align-items: center; gap: 20px; z-index: 100; }
+  .stat { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-dim); }
+  .stat span { color: var(--text); }
+  #viz { display: flex; align-items: center; gap: 2px; height: 20px; }
+  #viz div { width: 3px; background: var(--accent); border-radius: 2px; transition: height 0.1s; opacity: 0.6; }
+
+  #empty { position: absolute; top: 45%; left: 50%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; }
+  #empty .big { font-size: 48px; margin-bottom: 16px; opacity: 0.15; }
+  #empty p { color: var(--text-dim); font-size: 14px; line-height: 1.8; }
+</style>
+</head>
+<body>
+
+<!-- 主控制栏：基础设置 -->
+<header>
+  <div class="logo">◉ LIVE SUBTITLE</div>
+  <div class="endpoint-wrap"><label>API</label><input id="endpoint" type="text" value="http://192.168.2.28:9000/inference" style="width: 160px;" spellcheck="false"></div>
+  <select id="lang"><option value="zh">强制中文</option><option value="en">English</option><option value="auto">自动</option></select>
+  <select id="interval"><option value="4000">4秒/片</option><option value="6000" selected>6秒/片</option><option value="8000">8秒/片</option></select>
+  
+  <div class="endpoint-wrap toggle-wrap" title="关闭后无条件显示模型输出的所有字符">
+    <input type="checkbox" id="filter-toggle" checked>
+    <label for="filter-toggle">防复读机</label>
+  </div>
+
+  <div class="endpoint-wrap" title="识别音量阈值，游戏声音大可以调高点">
+    <label>VAD灵敏</label>
+    <input id="vad" type="range" min="0" max="0.3" step="0.01" value="0.01" style="width:50px;accent-color:var(--accent)">
+    <span id="vad-val" style="font-family:monospace;font-size:11px;color:var(--text);min-width:28px">0.01</span>
+  </div>
+
+  <div class="spacer"></div>
+  <div class="status-dot" id="dot"></div>
+  <div class="status-text" id="status-text">待机中</div>
+  <button class="btn btn-start" id="btn-start" onClick="startCapture()">开始捕获</button>
+  <button class="btn btn-stop" id="btn-stop" onClick="stopCapture()" style="display:none">停止</button>
+</header>
+
+<!-- 副控制栏：高级底层参数 -->
+<div class="sub-header">
+  <div class="endpoint-wrap" title="0.0最准但易死循环。若遇到死循环，调高到0.2~0.5可打断施法">
+    <label>温度(Temp)</label>
+    <input id="temp" type="range" min="0" max="1" step="0.1" value="0.0" style="width:60px;accent-color:#ffaa00">
+    <span id="temp-val" style="font-family:monospace;font-size:11px;color:#ffaa00;min-width:24px">0.0</span>
+  </div>
+
+  <div class="endpoint-wrap toggle-wrap" title="强制模型每段单独识别，防止上一句的幻觉污染下一句">
+    <input type="checkbox" id="nocontext-toggle" checked>
+    <label for="nocontext-toggle" style="color:#ffaa00">断绝上下文</label>
+  </div>
+
+  <div class="endpoint-wrap" style="flex:1;" title="可以给模型提供专有名词提示，例如：张麻子 黄四郎 马邦德">
+    <label style="color:#ffaa00">Prompt提示词</label>
+    <input id="custom-prompt" type="text" placeholder="留空则不干扰。若填入专有名词可提高识别率..." style="width: 100%;" spellcheck="false">
+  </div>
+</div>
+
+<main>
+  <div id="empty"><div class="big">🎙</div><p>已开放全部底层参数控制权<br>你可以一边放声音，一边实时调节面板参数</p></div>
+  <div id="subtitle-box"></div>
+</main>
+
+<footer>
+  <div class="stat">片段 <span id="s-chunks">0</span></div>
+  <div class="stat">识别 <span id="s-lines">0</span> 条</div>
+  <div class="stat">延迟 <span id="s-latency">—</span> ms</div>
+  <div class="spacer"></div>
+  <div id="viz"><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
+</footer>
+
+<script>
+// 数值联动显示
+document.getElementById('vad').addEventListener('input', function() { document.getElementById('vad-val').textContent = this.value; });
+document.getElementById('temp').addEventListener('input', function() { document.getElementById('temp-val').textContent = Number(this.value).toFixed(1); });
+
+let mediaStream = null, audioCtx = null, scriptNode = null, captureSource = null;
+let isRunning = false, intervalTimer = null, vizTimer = null;
+let totalChunks = 0, totalLines = 0, pendingText = '';
+let currentAbortController = null;
+
+const dot = document.getElementById('dot'), statusText = document.getElementById('status-text');
+const subtitleBox = document.getElementById('subtitle-box'), empty = document.getElementById('empty');
+
+function setStatus(s, cls) { statusText.textContent = s; dot.className = 'status-dot' + (cls ? ' ' + cls : ''); }
+function ts() { return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+
+function scrollToBottom() {
+  const isNearBottom = subtitleBox.scrollHeight - subtitleBox.clientHeight <= subtitleBox.scrollTop + 80;
+  if (isNearBottom) subtitleBox.scrollTop = subtitleBox.scrollHeight;
+}
+
+function cleanUpDOM() {
+  const MAX_LINES = 100;
+  const lines = subtitleBox.querySelectorAll('.subtitle-line');
+  if (lines.length > MAX_LINES) {
+    for (let i = 0; i < lines.length - MAX_LINES; i++) lines[i].remove();
+  }
+}
+
+async function startCapture() {
+  try { 
+    mediaStream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 16000 } }); 
+  } catch(e) { 
+    try { mediaStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }); } 
+    catch(e2) { alert('无法获取音频'); return; } 
+  }
+  
+  if (!mediaStream.getAudioTracks().length) { 
+    alert('未检测到音频，请勾选弹窗下方的「分享音频」'); 
+    mediaStream.getTracks().forEach(t => t.stop()); return; 
+  }
+  
+  mediaStream.getAudioTracks()[0].onended = () => stopCapture();
+  isRunning = true; empty.style.display = 'none';
+  document.getElementById('btn-start').style.display = 'none'; document.getElementById('btn-stop').style.display = '';
+  
+  setStatus('监听中', 'active'); 
+  setupViz(); 
+  startRecordingLoop();
+}
+
+function setupViz() {
+  audioCtx = new AudioContext(); 
+  let analyser = audioCtx.createAnalyser(); 
+  analyser.fftSize = 32;
+  audioCtx.createMediaStreamSource(mediaStream).connect(analyser);
+  let vizBars = document.querySelectorAll('#viz div'), buf = new Uint8Array(analyser.frequencyBinCount);
+  vizTimer = setInterval(() => { 
+    analyser.getByteFrequencyData(buf); 
+    vizBars.forEach((bar, i) => { bar.style.height = Math.max(2, (buf[i]/255)*16) + 'px'; }); 
+  }, 80);
+}
+
+function startRecordingLoop() {
+  const intervalMs = parseInt(document.getElementById('interval').value);
+  captureSource = audioCtx.createMediaStreamSource(new MediaStream(mediaStream.getAudioTracks()));
+  scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  let pcmBuffers = [];
+  
+  scriptNode.onaudioprocess = (e) => { 
+    if (isRunning) pcmBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0))); 
+  };
+  captureSource.connect(scriptNode); 
+  scriptNode.connect(audioCtx.destination);
+
+  intervalTimer = setInterval(async () => {
+    if (!isRunning || pcmBuffers.length === 0) return;
+    const collected = pcmBuffers.splice(0);
+    const totalLen = collected.reduce((s, b) => s + b.length, 0);
+    const merged = new Float32Array(totalLen);
+    let offset = 0; 
+    for (const buf of collected) { merged.set(buf, offset); offset += buf.length; }
+    
+    let sum = 0; for (let i = 0; i < merged.length; i++) sum += merged[i] * merged[i];
+    if (Math.sqrt(sum / merged.length) < parseFloat(document.getElementById('vad').value)) {
+      setStatus('等待声音...', 'active'); 
+      return;
+    }
+
+    totalChunks++; document.getElementById('s-chunks').textContent = totalChunks;
+    await sendToWhisper(encodeWAV(resample(merged, audioCtx.sampleRate, 16000), 16000));
+  }, intervalMs);
+}
+
+function resample(samples, fromRate, toRate) {
+  if (fromRate === toRate) return samples;
+  const ratio = fromRate / toRate, newLen = Math.round(samples.length / ratio), result = new Float32Array(newLen);
+  for (let i = 0; i < newLen; i++) { 
+    const pos = i * ratio, idx = Math.floor(pos), frac = pos - idx; 
+    result[i] = samples[idx] + frac * ((samples[idx+1]||0) - samples[idx]); 
+  }
+  return result;
+}
+
+function encodeWAV(samples, sampleRate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2), view = new DataView(buf);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); writeStr(8, 'WAVE'); writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  writeStr(36, 'data'); view.setUint32(40, samples.length * 2, true);
+  let o = 44; for (let i = 0; i < samples.length; i++) { 
+    const s = Math.max(-1, Math.min(1, samples[i])); 
+    view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true); 
+    o += 2; 
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+async function sendToWhisper(wavBlob) {
+  const endpoint = document.getElementById('endpoint').value.trim();
+  const lang = document.getElementById('lang').value;
+  const filterEnabled = document.getElementById('filter-toggle').checked;
+  
+  // 动态读取高级参数
+  const temperature = document.getElementById('temp').value;
+  const noContext = document.getElementById('nocontext-toggle').checked;
+  const customPrompt = document.getElementById('custom-prompt').value.trim();
+  
+  setStatus('识别中...', 'active');
+  const t0 = Date.now();
+  
+  try {
+    const form = new FormData(); 
+    form.append('file', wavBlob, 'audio.wav'); 
+    form.append('response_format', 'json'); 
+    
+    // 应用实时调整的参数
+    form.append('temperature', temperature);
+    if (noContext) {
+      form.append('no_context', 'true');
+    }
+    if (customPrompt.length > 0) {
+      form.append('prompt', customPrompt);
+    } else if (noContext) {
+      // 兜底：如果没填提示词又选了断开上下文，强塞空格清理模型记忆
+      form.append('prompt', ' ');
+    }
+    
+    if (lang !== 'auto') form.append('language', lang);
+
+    if (currentAbortController) currentAbortController.abort();
+    currentAbortController = new AbortController();
+    const timeoutId = setTimeout(() => currentAbortController.abort(), 12000);
+
+    const res = await fetch(endpoint, { method: 'POST', body: form, signal: currentAbortController.signal }); 
+    clearTimeout(timeoutId);
+    
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json(); 
+    document.getElementById('s-latency').textContent = Date.now() - t0;
+
+    let text = data.text ? data.text : (data.transcription ? data.transcription.map(s => s.text).join('') : '');
+    
+    if (text) {
+      text = text.replace(/\[.*?\]|\(.*?\)|\{.*?\}|\【.*?\】|\（.*?\）/g, '').trim();
+      text = text.replace(/^\s*[，。！？、]+\s*/, '').replace(/\s+/g, ' ');
+
+      if (lang === 'zh' && /^[a-zA-Z\s\.,\?\!\-\_]+$/.test(text)) {
+         setStatus('跳过纯英文', 'active'); return;
+      }
+      if (!text) {
+        setStatus('过滤环境音', 'active'); return;
+      }
+
+      if (filterEnabled) {
+        let isHallucination = false;
+        for (let len = 1; len <= 4; len++) {
+          for (let i = 0; i <= text.length - len; i++) {
+            let chunk = text.substr(i, len);
+            if (text.split(chunk).length - 1 >= 5) { isHallucination = true; break; }
+          }
+          if (isHallucination) break;
+        }
+        const stopWords = ["谢谢观看", "感谢观看", "请不吝赐教", "字幕由"];
+        for (const word of stopWords) { if (text.includes(word) && text.length < 15) { isHallucination = true; break; } }
+
+        if (isHallucination) {
+          setStatus(`拦截复读机`, 'active'); return;
+        }
+      }
+
+      setStatus('捕获正常', 'active');
+      const combined = (pendingText + (pendingText && !pendingText.endsWith(' ') && /^[a-zA-Z]/.test(text) ? ' ' : '') + text).trim();
+      const REAL_SENTENCE_END = /[。！？.!?…]+$/;
+      
+      if (REAL_SENTENCE_END.test(combined) || combined.length >= 35) {
+        addLine(combined); 
+        pendingText = ''; 
+        totalLines++; 
+        document.getElementById('s-lines').textContent = totalLines;
+      } else {
+        pendingText = combined; 
+        updatePending(combined);
+      }
+    } else {
+       setStatus('等待人声...', 'active');
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') setStatus('API 异常', 'error');
+  }
+}
+
+function addLine(text) { 
+  removePending(); 
+  subtitleBox.querySelectorAll('.subtitle-line.latest').forEach(el => el.classList.remove('latest')); 
+  const line = document.createElement('div'); 
+  line.className = 'subtitle-line latest'; 
+  line.innerHTML = `<span class="ts">${ts()}</span><span class="txt">${escHtml(text)}</span>`; 
+  subtitleBox.appendChild(line); 
+  
+  cleanUpDOM();
+  scrollToBottom();
+}
+
+let currentPendingEl = null;
+function updatePending(text) { 
+  if (currentPendingEl) {
+    currentPendingEl.querySelector('.txt').innerHTML = escHtml(text) + '<span class="pending-cursor"></span>';
+  } else {
+    currentPendingEl = document.createElement('div'); 
+    currentPendingEl.className = 'subtitle-line pending'; 
+    currentPendingEl.innerHTML = `<span class="ts">…</span><span class="txt">${escHtml(text)}<span class="pending-cursor"></span></span>`; 
+    subtitleBox.appendChild(currentPendingEl); 
+  }
+  scrollToBottom();
+}
+
+function removePending() { 
+  if (currentPendingEl) { currentPendingEl.remove(); currentPendingEl = null; } 
+}
+
+function stopCapture() { 
+  isRunning = false; 
+  clearInterval(intervalTimer); 
+  if (currentAbortController) currentAbortController.abort();
+  pendingText = ''; 
+  removePending(); 
+  if (scriptNode) scriptNode.disconnect(); 
+  if (captureSource) captureSource.disconnect(); 
+  if (mediaStream) mediaStream.getTracks().forEach(t => t.stop()); 
+  if (vizTimer) clearInterval(vizTimer); 
+  if (audioCtx) audioCtx.close(); 
+  
+  document.getElementById('btn-start').style.display = ''; 
+  document.getElementById('btn-stop').style.display = 'none'; 
+  setStatus('已停止', ''); 
+  if (!subtitleBox.children.length) empty.style.display = ''; 
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+</script>
+</body>
+</html>
