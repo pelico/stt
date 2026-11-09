@@ -444,6 +444,15 @@
           <option value="openai">OpenAI 兼容接口</option>
         </select>
       </div>
+      <div class="field">
+        <label>识别语言</label>
+        <select id="asr_language">
+          <option value="zh">中文</option>
+          <option value="en">英文</option>
+          <option value="auto">自动检测</option>
+        </select>
+        <div class="hint">指定中文可避免把中文识别成英文。腾讯一句话识别不支持自动检测，「自动」时按中文处理。</div>
+      </div>
 
       <div class="engine-panel" data-engine="aliyun">
         <div class="field">
@@ -843,6 +852,7 @@ async function loadSettings() {
   document.getElementById('rtsp_url').value = v.rtsp_url || '';
   loadRtspHistory();
   document.getElementById('asr_engine').value = v.asr_engine || 'aliyun';
+  document.getElementById('asr_language').value = v.asr_language || 'zh';
   document.getElementById('asr_model').value = v.asr_model || '';
   document.getElementById('tencent_region').value = v.tencent_region || '';
   document.getElementById('openai_base_url').value = v.openai_base_url || '';
@@ -878,6 +888,7 @@ async function saveSettings() {
   const patch = {
     rtsp_url: document.getElementById('rtsp_url').value.trim(),
     asr_engine: document.getElementById('asr_engine').value,
+    asr_language: document.getElementById('asr_language').value,
     asr_model: document.getElementById('asr_model').value.trim(),
     tencent_region: document.getElementById('tencent_region').value.trim(),
     openai_base_url: document.getElementById('openai_base_url').value.trim(),

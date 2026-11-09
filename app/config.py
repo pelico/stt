@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # 阿里云百炼实时语音识别模型
     asr_model: str = "paraformer-realtime-v2"
 
+    # 识别语言：zh / en / auto（各引擎支持程度不同）
+    asr_language: str = "zh"
+
     # 腾讯云一句话识别
     tencent_secret_id: str = ""
     tencent_secret_key: str = ""

@@ -80,6 +80,7 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `ASR_ENGINE` | `aliyun` | `aliyun` / `tencent` / `openai` |
 | `DASHSCOPE_API_KEY` | 空 | 阿里云百炼 API Key |
 | `ASR_MODEL` | `paraformer-realtime-v2` | 阿里云识别模型 |
+| `ASR_LANGUAGE` | `zh` | 识别语言：`zh` / `en` / `auto` |
 | `TENCENT_SECRET_ID` | 空 | 腾讯云 SecretId |
 | `TENCENT_SECRET_KEY` | 空 | 腾讯云 SecretKey |
 | `TENCENT_REGION` | `ap-shanghai` | 腾讯云地域 |

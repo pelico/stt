@@ -16,6 +16,7 @@ FIELD_TYPES: Dict[str, type] = {
     "rtsp_url": str,
     "asr_engine": str,
     "asr_model": str,
+    "asr_language": str,
     "dashscope_api_key": str,
     "tencent_secret_id": str,
     "tencent_secret_key": str,
@@ -46,6 +47,7 @@ DEFAULTS: Dict[str, Any] = {
     "rtsp_url": settings.rtsp_url,
     "asr_engine": settings.asr_engine,
     "asr_model": settings.asr_model,
+    "asr_language": settings.asr_language,
     "dashscope_api_key": settings.dashscope_api_key,
     "tencent_secret_id": settings.tencent_secret_id,
     "tencent_secret_key": settings.tencent_secret_key,
@@ -65,6 +67,7 @@ DEFAULTS: Dict[str, Any] = {
 }
 
 ENGINES = ("aliyun", "tencent", "openai")
+LANGUAGES = ("zh", "en", "auto")
 ALLOWED_FRAME_MS = (10, 20, 30)
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -147,6 +150,8 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("vad_rms_dbfs 必须在 -80 ~ -10")
     if key == "asr_engine" and value not in ENGINES:
         raise ValueError(f"asr_engine 必须是 {'/'.join(ENGINES)}")
+    if key == "asr_language" and value not in LANGUAGES:
+        raise ValueError(f"asr_language 必须是 {'/'.join(LANGUAGES)}")
 
     if expected is str:
         if value is None:

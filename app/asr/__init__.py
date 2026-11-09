@@ -23,6 +23,7 @@ def _signature(engine: str, cfg) -> tuple:
     return (
         engine,
         cfg.get("asr_model"),
+        cfg.get("asr_language"),
         cfg.get("dashscope_api_key"),
         cfg.get("tencent_secret_id"),
         cfg.get("tencent_secret_key"),

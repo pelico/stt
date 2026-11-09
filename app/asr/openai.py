@@ -19,14 +19,18 @@ class OpenAISR(BaseASR):
         self.base_url = (cfg.get("openai_base_url") or "").rstrip("/")
         self.api_key = cfg.get("openai_api_key")
         self.model = cfg.get("openai_model") or "whisper-1"
+        self.language = cfg.get("asr_language") or "auto"
 
     def _transcribe_sync(self, pcm: bytes) -> str:
         wav = pcm_to_wav(pcm)
+        data = {"model": self.model}
+        if self.language != "auto":
+            data["language"] = self.language
         resp = requests.post(
             f"{self.base_url}/audio/transcriptions",
             headers={"Authorization": f"Bearer {self.api_key}"},
             files={"file": ("audio.wav", wav, "audio/wav")},
-            data={"model": self.model},
+            data=data,
             timeout=60,
         )
         resp.raise_for_status()

@@ -72,15 +72,21 @@ def _sign(secret_id: str, secret_key: str, action: str, region: str, payload: st
 class TencentASR(BaseASR):
     engine_name = "tencent"
 
+    # 一句话识别没有自动语种检测，只能按语言选引擎
+    SERVICE_TYPES = {"zh": "16k_zh", "en": "16k_en", "auto": "16k_zh"}
+
     def __init__(self, cfg):
         self.secret_id = cfg.get("tencent_secret_id")
         self.secret_key = cfg.get("tencent_secret_key")
         self.region = cfg.get("tencent_region") or "ap-shanghai"
+        self.service_type = self.SERVICE_TYPES.get(
+            cfg.get("asr_language") or "auto", "16k_zh"
+        )
 
     def _recognize_sync(self, pcm: bytes) -> str:
         audio_b64 = base64.b64encode(pcm).decode("ascii")
         body = {
-            "EngSerViceType": "16k_zh",
+            "EngSerViceType": self.service_type,
             "SourceType": 1,
             "VoiceFormat": "pcm",
             "Data": audio_b64,

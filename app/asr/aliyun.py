@@ -51,6 +51,7 @@ class AliyunASR(BaseASR):
     def __init__(self, cfg):
         self.api_key = cfg.get("dashscope_api_key")
         self.model = cfg.get("asr_model") or "paraformer-realtime-v2"
+        self.language = cfg.get("asr_language") or "auto"
         self.sample_rate = 16000
 
     async def recognize(self, pcm: bytes) -> str:
@@ -60,11 +61,17 @@ class AliyunASR(BaseASR):
 
         dashscope.api_key = self.api_key
         callback = _Callback()
+        kwargs = {}
+        if self.language != "auto" and "v2" in self.model:
+            # paraformer-realtime-v2 及以后支持 language_hints，可避免中英混淆
+            # v1 仅支持中文，传该参数可能被服务端拒绝
+            kwargs["language_hints"] = [self.language]
         rt = Recognition(
             model=self.model,
             callback=callback,
             format="pcm",
             sample_rate=self.sample_rate,
+            **kwargs,
         )
 
         try:
