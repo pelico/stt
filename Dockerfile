@@ -4,9 +4,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# 安装 ffmpeg 和运行依赖
+# 安装 ffmpeg 和编译依赖（webrtcvad 需要 gcc）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -14,6 +15,11 @@ WORKDIR /app
 # 先装依赖（利用缓存）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# 编译完成后卸载编译工具，减小镜像体积
+RUN apt-get remove -y build-essential \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # 拷贝代码
 COPY app/ ./app/
