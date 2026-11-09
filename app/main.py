@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import init_db, save_transcript, list_transcripts, iso_utc
 from app.logbuffer import BufferHandler, LogBuffer
 from app.stream import AudioStreamer
-from app.runtime_config import get_runtime, ENGINES, asr_active
+from app.runtime_config import get_runtime, ENGINES, asr_active, in_schedule
 from app.asr import get_asr
 
 logging.basicConfig(
@@ -120,6 +120,11 @@ async def on_audio_frame(frame: bytes):
         await asyncio.gather(*sends, return_exceptions=True)
 
 
+async def on_stream_state(paused: bool):
+    """时段外挂起/恢复时通知前端。"""
+    await _broadcast({"type": "stream", "paused": paused})
+
+
 def _on_config_change(changed: List[str]):
     """配置热更新回调。"""
     if "rtsp_url" in changed and _streamer is not None:
@@ -141,6 +146,8 @@ async def lifespan(app: FastAPI):
         cfg=cfg,
         on_vad_state=on_vad_state,
         on_audio_frame=on_audio_frame,
+        should_stream=lambda: in_schedule(get_runtime()),
+        on_stream_state=on_stream_state,
     )
     _stream_task = asyncio.create_task(_streamer.start())
     logger.info(
@@ -242,6 +249,7 @@ async def health():
         "asr_start_time": cfg.get("asr_start_time"),
         "asr_end_time": cfg.get("asr_end_time"),
         "asr_active": asr_active(cfg),
+        "stream_paused": bool(_streamer and _streamer.paused),
         "stream_running": bool(_stream_task and not _stream_task.done()),
     }
 
@@ -250,6 +258,11 @@ async def health():
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     _active_clients.append(ws)
+    if _streamer is not None and _streamer.paused:
+        try:
+            await ws.send_json({"type": "stream", "paused": True})
+        except Exception:
+            pass
     logger.info("WebSocket 客户端连接，当前 %d 个", len(_active_clients))
     try:
         while True:

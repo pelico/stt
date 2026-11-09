@@ -478,7 +478,7 @@
         <label>结束时间</label>
         <input type="time" id="asr_end_time" />
       </div>
-      <div class="hint">按容器本地时间（TZ 环境变量），跨午夜可设 22:00–06:00；起止相同表示全天。时段外仍会拉流和监听，只是不调用识别接口。</div>
+      <div class="hint">按容器本地时间（TZ 环境变量），跨午夜可设 22:00–06:00；起止相同表示全天。时段外会断开拉流，摄像头不再被拉取，进入时段自动重连（约 2 秒）。顶部识别开关只影响识别，不影响拉流和监听。</div>
     </div>
 
     <div class="group">
@@ -636,8 +636,23 @@ function connectWS() {
       prependHistoryItem(msg);
     } else if (msg.type === 'vad') {
       updateVad(msg);
+    } else if (msg.type === 'stream') {
+      updateStreamState(msg.paused);
     }
   };
+}
+
+function updateStreamState(paused) {
+  if (paused) {
+    vadLevel.style.width = '0%';
+    vadBadge.textContent = '已停流';
+    vadBadge.className = 'vad-badge';
+    vadStats.textContent = '不在时段内，拉流已停止';
+  } else {
+    vadBadge.textContent = '静音';
+    vadStats.textContent = '切段 0 · 丢弃 0';
+    if (listenWanted) showToast('已进入时段，拉流恢复');
+  }
 }
 
 function updateVad(msg) {

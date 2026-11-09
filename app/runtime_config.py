@@ -92,10 +92,8 @@ def in_time_window(start: str, end: str, now: datetime) -> bool:
     return current >= start_min or current < end_min
 
 
-def asr_active(cfg) -> bool:
-    """总开关打开，且（未启用时段限制 或 当前处于时段内）时才会识别。"""
-    if not cfg.get("asr_enabled", True):
-        return False
+def in_schedule(cfg) -> bool:
+    """是否处于允许拉流/识别的时间段；未启用时段限制时始终为 True。"""
     if not cfg.get("asr_schedule_enabled", False):
         return True
     try:
@@ -105,6 +103,11 @@ def asr_active(cfg) -> bool:
     except (TypeError, ValueError):
         logger.warning("识别时段配置非法，按不限制处理")
         return True
+
+
+def asr_active(cfg) -> bool:
+    """总开关打开且处于时段内时才识别。"""
+    return bool(cfg.get("asr_enabled", True)) and in_schedule(cfg)
 
 
 def _mask(value: str) -> str:

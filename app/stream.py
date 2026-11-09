@@ -49,14 +49,19 @@ class AudioStreamer:
         cfg,
         on_vad_state: Optional[Callable[[dict], object]] = None,
         on_audio_frame: Optional[Callable[[bytes], object]] = None,
+        should_stream: Optional[Callable[[], bool]] = None,
+        on_stream_state: Optional[Callable[[bool], object]] = None,
     ):
         self.cfg = cfg
         self.on_speech_segment = on_speech_segment
         self.on_vad_state = on_vad_state
         self.on_audio_frame = on_audio_frame
+        self.should_stream = should_stream
+        self.on_stream_state = on_stream_state
         self.sample_rate = 16000
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._running = False
+        self._paused = False
         self._restart = asyncio.Event()
         self._vad: Optional[webrtcvad.Vad] = None
         self._vad_mode: Optional[int] = None
@@ -87,6 +92,11 @@ class AudioStreamer:
             "dropped": self._dropped,
             "last_duration_ms": self._last_duration_ms,
         }
+
+    @property
+    def paused(self) -> bool:
+        """时段外挂起中（未拉流）。"""
+        return self._paused
 
     def restart(self):
         """立即中断当前拉流，用新配置重连。"""
@@ -132,11 +142,37 @@ class AudioStreamer:
                 pass
         self._queue.put_nowait(segment)
 
+    async def _notify_stream_state(self, paused: bool):
+        if self.on_stream_state is None:
+            return
+        try:
+            await self.on_stream_state(paused)
+        except Exception:
+            pass
+
+    async def _pause_stream(self):
+        """时段外挂起：断开 ffmpeg，等待重新进入时段。"""
+        if not self._paused:
+            self._paused = True
+            logger.info("不在拉流时段，已断开 ffmpeg")
+            await self._notify_stream_state(True)
+        while self._running:
+            if self.should_stream is None or self.should_stream():
+                break
+            await asyncio.sleep(2)
+        if self._running:
+            self._paused = False
+            logger.info("进入拉流时段，恢复拉流")
+            await self._notify_stream_state(False)
+
     async def start(self):
         """启动拉流循环。"""
         self._running = True
         self._worker = asyncio.create_task(self._consume())
         while self._running:
+            if self.should_stream is not None and not self.should_stream():
+                await self._pause_stream()
+                continue
             try:
                 await self._run_once()
             except asyncio.CancelledError:
@@ -146,6 +182,10 @@ class AudioStreamer:
 
             if not self._running:
                 break
+
+            # 刚因时段结束而断开：立即进入挂起，不等待重连间隔
+            if self.should_stream is not None and not self.should_stream():
+                continue
 
             try:
                 await asyncio.wait_for(self._restart.wait(), timeout=5)
@@ -207,6 +247,9 @@ class AudioStreamer:
         last_speech = None
 
         while self._running:
+            if self.should_stream is not None and not self.should_stream():
+                logger.info("离开拉流时段，断开 ffmpeg")
+                break
             frame_ms = int(self.cfg.get("vad_frame_ms", 30))
             frame_bytes = self.sample_rate * frame_ms // 1000 * 2
             silence_limit = int(self.cfg.get("vad_silence_frames", 10))
@@ -283,6 +326,13 @@ class AudioStreamer:
                         )
                     except Exception:
                         pass
+
+        # 时段结束或主动停止时，循环会提前 break，需要手动结束 ffmpeg
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
         try:
             await asyncio.wait_for(stderr_task, timeout=2)
