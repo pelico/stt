@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # 连续语音多少帧后才认为是有效语音（过滤短促噪声）
     vad_min_speech_frames: int = 3
 
+    # 能量门限（dBFS）：低于该音量的帧不判定为语音，-80 ~ -10
+    vad_rms_dbfs: int = -45
+
     # HTTP 服务端口
     http_port: int = 8000
 

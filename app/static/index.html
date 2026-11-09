@@ -88,6 +88,37 @@
   }
   .live-item .time { font-size: 11px; color: #64748b; margin-bottom: 4px; }
   .live-item .text { font-size: 16px; line-height: 1.6; word-break: break-word; }
+
+  .vad-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid #334155;
+    font-size: 11px;
+    color: #94a3b8;
+  }
+  .vad-badge {
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #334155;
+    white-space: nowrap;
+  }
+  .vad-badge.on { background: #166534; color: #dcfce7; }
+  .vad-meter {
+    flex: 1;
+    height: 6px;
+    background: #0f172a;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .vad-meter-fill {
+    height: 100%;
+    width: 0%;
+    background: #3b82f6;
+    transition: width 0.1s linear;
+  }
+  .vad-stats { white-space: nowrap; }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -261,6 +292,11 @@
 <main>
   <div class="live-panel">
     <div class="panel-title">实时字幕</div>
+    <div class="vad-bar">
+      <span class="vad-badge" id="vad-badge">静音</span>
+      <div class="vad-meter"><div class="vad-meter-fill" id="vad-level"></div></div>
+      <span class="vad-stats" id="vad-stats">切段 0 · 丢弃 0</span>
+    </div>
     <div id="live-content" class="live-content">
       <div class="empty">等待语音输入...</div>
     </div>
@@ -354,6 +390,11 @@
         <div class="hint">0 最灵敏（小声也会识别，噪声多），3 最严格（嘈杂环境更干净）。</div>
       </div>
       <div class="field">
+        <label>能量门限 <span class="value-tag" id="rms_val">-45 dBFS</span></label>
+        <input type="range" id="vad_rms_dbfs" min="-80" max="-10" step="1" />
+        <div class="hint">低于该音量的声音不算语音。噪声大往上调（如 -35），说话轻就往下调（如 -55）。</div>
+      </div>
+      <div class="field">
         <label>分析帧长（毫秒）</label>
         <select id="vad_frame_ms">
           <option value="10">10</option>
@@ -389,6 +430,9 @@ const statusEl = document.getElementById('status');
 const engineTag = document.getElementById('engine-tag');
 const engineBanner = document.getElementById('engine-banner');
 const searchInput = document.getElementById('search');
+const vadBadge = document.getElementById('vad-badge');
+const vadLevel = document.getElementById('vad-level');
+const vadStats = document.getElementById('vad-stats');
 const drawer = document.getElementById('drawer');
 const drawerMask = document.getElementById('drawer-mask');
 const toastEl = document.getElementById('toast');
@@ -423,8 +467,21 @@ function connectWS() {
     if (msg.type === 'transcript') {
       addLiveItem(msg);
       prependHistoryItem(msg);
+    } else if (msg.type === 'vad') {
+      updateVad(msg);
     }
   };
+}
+
+function updateVad(msg) {
+  const pct = Math.max(0, Math.min(100, ((msg.level + 60) / 60) * 100));
+  vadLevel.style.width = pct + '%';
+  vadLevel.style.background = msg.speech ? '#22c55e' : '#3b82f6';
+  vadBadge.textContent = msg.active ? '说话中' : (msg.speech ? '语音' : '静音');
+  vadBadge.className = 'vad-badge' + (msg.active ? ' on' : '');
+  let text = `切段 ${msg.segments} · 丢弃 ${msg.dropped}`;
+  if (msg.last_duration_ms) text += ` · 最近 ${msg.last_duration_ms}ms`;
+  vadStats.textContent = text;
 }
 
 function fmtTime(iso) {
@@ -487,6 +544,7 @@ function applyEnginePanels(engine) {
 function syncVadLabels() {
   const frameMs = parseInt(document.getElementById('vad_frame_ms').value, 10);
   document.getElementById('vad_mode_val').textContent = document.getElementById('vad_mode').value;
+  document.getElementById('rms_val').textContent = document.getElementById('vad_rms_dbfs').value + ' dBFS';
   const silenceFrames = parseInt(document.getElementById('vad_silence_frames').value, 10);
   const minSpeech = parseInt(document.getElementById('vad_min_speech_frames').value, 10);
   document.getElementById('silence_ms_val').textContent = (silenceFrames * frameMs) + ' ms';
@@ -516,6 +574,7 @@ async function loadSettings() {
   });
 
   document.getElementById('vad_mode').value = v.vad_mode;
+  document.getElementById('vad_rms_dbfs').value = v.vad_rms_dbfs;
   document.getElementById('vad_frame_ms').value = v.vad_frame_ms;
   document.getElementById('vad_silence_frames').value = v.vad_silence_frames;
   document.getElementById('vad_min_speech_frames').value = v.vad_min_speech_frames;
@@ -534,6 +593,7 @@ async function saveSettings() {
     openai_base_url: document.getElementById('openai_base_url').value.trim(),
     openai_model: document.getElementById('openai_model').value.trim(),
     vad_mode: parseInt(document.getElementById('vad_mode').value, 10),
+    vad_rms_dbfs: parseInt(document.getElementById('vad_rms_dbfs').value, 10),
     vad_frame_ms: parseInt(document.getElementById('vad_frame_ms').value, 10),
     vad_silence_frames: parseInt(document.getElementById('vad_silence_frames').value, 10),
     vad_min_speech_frames: parseInt(document.getElementById('vad_min_speech_frames').value, 10),
@@ -575,7 +635,7 @@ document.getElementById('cancel-settings').addEventListener('click', closeDrawer
 drawerMask.addEventListener('click', closeDrawer);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 document.getElementById('asr_engine').addEventListener('change', (e) => applyEnginePanels(e.target.value));
-['vad_mode', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames'].forEach(id => {
+['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames'].forEach(id => {
   document.getElementById(id).addEventListener('input', syncVadLabels);
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });

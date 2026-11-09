@@ -25,6 +25,7 @@ FIELD_TYPES: Dict[str, type] = {
     "vad_frame_ms": int,
     "vad_silence_frames": int,
     "vad_min_speech_frames": int,
+    "vad_rms_dbfs": int,
 }
 
 # 需要打码的字段
@@ -50,6 +51,7 @@ DEFAULTS: Dict[str, Any] = {
     "vad_frame_ms": settings.vad_frame_ms,
     "vad_silence_frames": settings.vad_silence_frames,
     "vad_min_speech_frames": settings.vad_min_speech_frames,
+    "vad_rms_dbfs": settings.vad_rms_dbfs,
 }
 
 ENGINES = ("aliyun", "tencent", "openai")
@@ -83,6 +85,8 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("vad_silence_frames 必须在 1-200")
     if key == "vad_min_speech_frames" and not (1 <= value <= 100):
         raise ValueError("vad_min_speech_frames 必须在 1-100")
+    if key == "vad_rms_dbfs" and not (-80 <= value <= -10):
+        raise ValueError("vad_rms_dbfs 必须在 -80 ~ -10")
     if key == "asr_engine" and value not in ENGINES:
         raise ValueError(f"asr_engine 必须是 {'/'.join(ENGINES)}")
 

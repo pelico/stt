@@ -40,6 +40,15 @@ def _engine_ready(cfg) -> bool:
     return False
 
 
+async def _broadcast(message: dict):
+    """向所有前端推送消息，单个客户端卡住不影响音频处理。"""
+    for ws in list(_active_clients):
+        try:
+            await asyncio.wait_for(ws.send_json(message), timeout=1)
+        except Exception:
+            pass
+
+
 async def on_speech_segment(audio_data: bytes):
     """收到一段语音后的处理：识别 -> 存库 -> 推送前端。"""
     cfg = get_runtime()
@@ -75,11 +84,12 @@ async def on_speech_segment(audio_data: bytes):
         "duration_sec": int(duration_sec),
         "id": record.id if record else None,
     }
-    for ws in list(_active_clients):
-        try:
-            await ws.send_json(message)
-        except Exception:
-            pass
+    await _broadcast(message)
+
+
+async def on_vad_state(state: dict):
+    """把 VAD 实时状态推给前端，用于调参。"""
+    await _broadcast(state)
 
 
 def _on_config_change(changed: List[str]):
@@ -98,7 +108,11 @@ async def lifespan(app: FastAPI):
     cfg.subscribe(_on_config_change)
 
     global _streamer, _stream_task
-    _streamer = AudioStreamer(on_speech_segment=on_speech_segment, cfg=cfg)
+    _streamer = AudioStreamer(
+        on_speech_segment=on_speech_segment,
+        cfg=cfg,
+        on_vad_state=on_vad_state,
+    )
     _stream_task = asyncio.create_task(_streamer.start())
     logger.info(
         "音频拉流已启动，RTSP: %s，引擎: %s",

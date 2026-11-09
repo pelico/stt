@@ -85,6 +85,7 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `VAD_FRAME_MS` | `30` | 分析帧长 10/20/30 |
 | `VAD_SILENCE_FRAMES` | `10` | 静音多少帧判定一句结束 |
 | `VAD_MIN_SPEECH_FRAMES` | `3` | 有效语音最少帧数 |
+| `VAD_RMS_DBFS` | `-45` | 能量门限（dBFS），低于该音量不算语音 |
 | `HTTP_PORT` | `8000` | 服务端口 |
 | `DB_PATH` | `/data/asr.db` | 数据库路径 |
 | `SETTINGS_PATH` | `/data/settings.json` | Web 设置持久化路径 |
@@ -92,10 +93,13 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 
 ## VAD 调参建议
 
-- 环境安静、说话小声：`VAD_MODE` 调低到 1，`VAD_MIN_SPEECH_FRAMES` 保持 3
-- 环境嘈杂、误触发多：`VAD_MODE` 用 3，`VAD_MIN_SPEECH_FRAMES` 调到 5-8
+页面顶部有实时 VAD 状态条：音量电平、当前是否判定为语音、切段/丢弃统计。调参时对照观察最直观。
+
+- 环境安静、说话小声：`VAD_MODE` 调低到 1，能量门限降到 `-55` 左右
+- 环境嘈杂、误触发多：`VAD_MODE` 用 3，能量门限升到 `-35` 左右，`VAD_MIN_SPEECH_FRAMES` 调到 5-8
 - 一句话被切得太碎：调大 `VAD_SILENCE_FRAMES`（例如 20 → 600ms）
 - 出字太慢、想要快速断句：调小 `VAD_SILENCE_FRAMES`（例如 6 → 180ms）
+- 「丢弃」计数一直涨：说明切出来的段太短，调小 `VAD_MIN_SPEECH_FRAMES` 或降低能量门限
 
 ## 架构
 
