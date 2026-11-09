@@ -14,7 +14,7 @@ from app.config import settings
 from app.database import init_db, save_transcript, list_transcripts, iso_utc
 from app.logbuffer import BufferHandler, LogBuffer
 from app.stream import AudioStreamer
-from app.runtime_config import get_runtime, ENGINES
+from app.runtime_config import get_runtime, ENGINES, asr_active
 from app.asr import get_asr
 
 logging.basicConfig(
@@ -64,6 +64,9 @@ async def on_speech_segment(audio_data: bytes):
     """收到一段语音后的处理：识别 -> 存库 -> 推送前端。"""
     cfg = get_runtime()
     duration_sec = len(audio_data) / (settings.sample_rate * 2)
+    if not asr_active(cfg):
+        logger.debug("当前已暂停或不在识别时段，跳过 %.1f 秒语音", duration_sec)
+        return
     logger.info("收到语音段: %.1f 秒", duration_sec)
 
     try:
@@ -188,6 +191,7 @@ async def read_settings():
         "values": cfg.snapshot(mask=True),
         "engines": list(ENGINES),
         "engine_ready": _engine_ready(cfg),
+        "asr_active": asr_active(cfg),
     }
 
 
@@ -203,6 +207,7 @@ async def update_settings(patch: dict):
         "changed": changed,
         "values": cfg.snapshot(mask=True),
         "engine_ready": _engine_ready(cfg),
+        "asr_active": asr_active(cfg),
     }
 
 
@@ -232,6 +237,11 @@ async def health():
         "rtsp_url": cfg.get("rtsp_url"),
         "asr_engine": cfg.get("asr_engine"),
         "engine_ready": _engine_ready(cfg),
+        "asr_enabled": cfg.get("asr_enabled"),
+        "asr_schedule_enabled": cfg.get("asr_schedule_enabled"),
+        "asr_start_time": cfg.get("asr_start_time"),
+        "asr_end_time": cfg.get("asr_end_time"),
+        "asr_active": asr_active(cfg),
         "stream_running": bool(_stream_task and not _stream_task.done()),
     }
 

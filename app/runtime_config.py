@@ -2,7 +2,9 @@
 import json
 import logging
 import os
+import re
 import threading
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
@@ -26,6 +28,10 @@ FIELD_TYPES: Dict[str, type] = {
     "vad_silence_frames": int,
     "vad_min_speech_frames": int,
     "vad_rms_dbfs": int,
+    "asr_enabled": bool,
+    "asr_schedule_enabled": bool,
+    "asr_start_time": str,
+    "asr_end_time": str,
 }
 
 # 需要打码的字段
@@ -52,10 +58,53 @@ DEFAULTS: Dict[str, Any] = {
     "vad_silence_frames": settings.vad_silence_frames,
     "vad_min_speech_frames": settings.vad_min_speech_frames,
     "vad_rms_dbfs": settings.vad_rms_dbfs,
+    "asr_enabled": settings.asr_enabled,
+    "asr_schedule_enabled": settings.asr_schedule_enabled,
+    "asr_start_time": settings.asr_start_time,
+    "asr_end_time": settings.asr_end_time,
 }
 
 ENGINES = ("aliyun", "tencent", "openai")
 ALLOWED_FRAME_MS = (10, 20, 30)
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _minutes(text: str) -> int:
+    hour, minute = str(text).split(":")
+    return int(hour) * 60 + int(minute)
+
+
+def in_time_window(start: str, end: str, now: datetime) -> bool:
+    """判断当前时间是否落在 [start, end) 内，支持跨午夜；起止相同表示全天。"""
+    start_min = _minutes(start)
+    end_min = _minutes(end)
+    current = now.hour * 60 + now.minute
+    if start_min == end_min:
+        return True
+    if start_min < end_min:
+        return start_min <= current < end_min
+    return current >= start_min or current < end_min
+
+
+def asr_active(cfg) -> bool:
+    """总开关打开，且（未启用时段限制 或 当前处于时段内）时才会识别。"""
+    if not cfg.get("asr_enabled", True):
+        return False
+    if not cfg.get("asr_schedule_enabled", False):
+        return True
+    try:
+        return in_time_window(
+            cfg.get("asr_start_time"), cfg.get("asr_end_time"), datetime.now()
+        )
+    except (TypeError, ValueError):
+        logger.warning("识别时段配置非法，按不限制处理")
+        return True
 
 
 def _mask(value: str) -> str:
@@ -76,9 +125,15 @@ def _validate(key: str, value: Any) -> Any:
             value = int(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} 必须是整数")
+    if expected is bool:
+        value = _to_bool(value)
 
     if key == "vad_mode" and value not in (0, 1, 2, 3):
         raise ValueError("vad_mode 必须是 0-3")
+    if key in ("asr_start_time", "asr_end_time"):
+        value = str(value).strip()
+        if not TIME_RE.match(value):
+            raise ValueError(f"{key} 必须是 HH:MM 格式")
     if key == "vad_frame_ms" and value not in ALLOWED_FRAME_MS:
         raise ValueError("vad_frame_ms 只能是 10/20/30")
     if key == "vad_silence_frames" and not (1 <= value <= 200):

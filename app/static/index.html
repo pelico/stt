@@ -44,6 +44,17 @@
   }
   .icon-btn:hover { background: #475569; }
   .icon-btn.active { background: #166534; color: #dcfce7; }
+  .icon-btn.warn { background: #78350f; color: #fde68a; }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #cbd5e1;
+    margin-bottom: 12px;
+    cursor: pointer;
+  }
+  .check-row input { width: 16px; height: 16px; accent-color: #3b82f6; }
 
   .banner {
     display: none;
@@ -281,7 +292,7 @@
     color: #cbd5e1;
     margin-bottom: 6px;
   }
-  .field input[type=text], .field input[type=password], .field input[type=number], .field select {
+  .field input[type=text], .field input[type=password], .field input[type=number], .field input[type=time], .field select {
     width: 100%;
     padding: 8px 10px;
     background: #0f172a;
@@ -339,6 +350,7 @@
   <h1>🎙️ RTSP 语音转文字</h1>
   <span id="status" class="status disconnected">未连接</span>
   <span id="engine-tag" class="status">引擎: -</span>
+  <button class="icon-btn" id="asr-toggle" title="识别总开关">🟢 识别中</button>
   <div class="spacer"></div>
   <button class="icon-btn" id="listen-btn" title="实时收听摄像头声音">🔊 监听</button>
   <button class="icon-btn" id="open-logs" title="查看容器运行日志">📜 日志</button>
@@ -453,6 +465,23 @@
     </div>
 
     <div class="group">
+      <div class="group-title">识别时段</div>
+      <label class="check-row">
+        <input type="checkbox" id="asr_schedule_enabled" />
+        只在指定时段识别
+      </label>
+      <div class="field">
+        <label>开始时间</label>
+        <input type="time" id="asr_start_time" />
+      </div>
+      <div class="field">
+        <label>结束时间</label>
+        <input type="time" id="asr_end_time" />
+      </div>
+      <div class="hint">按容器本地时间（TZ 环境变量），跨午夜可设 22:00–06:00；起止相同表示全天。时段外仍会拉流和监听，只是不调用识别接口。</div>
+    </div>
+
+    <div class="group">
       <div class="group-title">VAD 静音检测</div>
       <div class="field">
         <label>灵敏度 <span class="value-tag" id="vad_mode_val">3</span></label>
@@ -507,6 +536,7 @@ const drawer = document.getElementById('drawer');
 const drawerMask = document.getElementById('drawer-mask');
 const toastEl = document.getElementById('toast');
 const listenBtn = document.getElementById('listen-btn');
+const asrToggle = document.getElementById('asr-toggle');
 const logPanel = document.getElementById('log-panel');
 const logMask = document.getElementById('log-mask');
 const logBody = document.getElementById('log-body');
@@ -669,6 +699,43 @@ searchInput.addEventListener('input', () => {
   searchTimer = setTimeout(() => loadHistory(searchInput.value.trim()), 300);
 });
 
+/* ---------- 识别开关 ---------- */
+function renderAsrState(data) {
+  const enabled = !!data.asr_enabled;
+  const active = !!data.asr_active;
+  asrToggle.dataset.enabled = enabled ? '1' : '0';
+  if (!enabled) {
+    asrToggle.textContent = '⏸ 识别已关';
+    asrToggle.className = 'icon-btn warn';
+    asrToggle.title = '点击开启识别';
+  } else if (!active) {
+    asrToggle.textContent = '⏸ 时段外';
+    asrToggle.className = 'icon-btn warn';
+    asrToggle.title = '已开启，但当前不在识别时段';
+  } else {
+    asrToggle.textContent = '🟢 识别中';
+    asrToggle.className = 'icon-btn active';
+    asrToggle.title = '点击暂停识别';
+  }
+}
+
+async function toggleAsr() {
+  const next = asrToggle.dataset.enabled !== '1';
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ asr_enabled: next }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '切换失败');
+    renderAsrState({ asr_enabled: data.values.asr_enabled, asr_active: data.asr_active });
+    showToast(next ? '识别已开启' : '识别已暂停（仍可监听和看状态）');
+  } catch (e) {
+    showToast(e.message, true);
+  }
+}
+
 /* ---------- 设置 ---------- */
 function applyEnginePanels(engine) {
   currentEngine = engine;
@@ -717,8 +784,13 @@ async function loadSettings() {
   document.getElementById('vad_min_speech_frames').value = v.vad_min_speech_frames;
   syncVadLabels();
 
+  document.getElementById('asr_schedule_enabled').checked = !!v.asr_schedule_enabled;
+  document.getElementById('asr_start_time').value = v.asr_start_time || '08:00';
+  document.getElementById('asr_end_time').value = v.asr_end_time || '22:00';
+
   applyEnginePanels(v.asr_engine || 'aliyun');
   engineBanner.className = 'banner' + (data.engine_ready ? '' : ' show');
+  renderAsrState({ asr_enabled: v.asr_enabled, asr_active: data.asr_active });
 }
 
 async function saveSettings() {
@@ -734,6 +806,9 @@ async function saveSettings() {
     vad_frame_ms: parseInt(document.getElementById('vad_frame_ms').value, 10),
     vad_silence_frames: parseInt(document.getElementById('vad_silence_frames').value, 10),
     vad_min_speech_frames: parseInt(document.getElementById('vad_min_speech_frames').value, 10),
+    asr_schedule_enabled: document.getElementById('asr_schedule_enabled').checked,
+    asr_start_time: document.getElementById('asr_start_time').value,
+    asr_end_time: document.getElementById('asr_end_time').value,
   };
   SECRET_FIELDS.forEach(id => {
     const value = document.getElementById(id).value.trim();
@@ -849,6 +924,7 @@ function closeDrawer() {
 }
 
 document.getElementById('open-settings').addEventListener('click', openDrawer);
+asrToggle.addEventListener('click', toggleAsr);
 document.getElementById('open-logs').addEventListener('click', openLogs);
 document.getElementById('log-close').addEventListener('click', closeLogs);
 document.getElementById('log-clear').addEventListener('click', clearLogs);
@@ -874,6 +950,15 @@ document.addEventListener('keydown', (e) => {
 connectWS();
 loadHistory();
 loadSettings().catch(() => {});
+// 定时同步识别状态，让时段切换（进入/离开时间段）自动反映到按钮上
+setInterval(async () => {
+  try {
+    const res = await fetch('/api/health');
+    if (res.ok) renderAsrState(await res.json());
+  } catch (e) {
+    /* 忽略 */
+  }
+}, 30000);
 </script>
 </body>
 </html>

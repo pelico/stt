@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     # 能量门限（dBFS）：低于该音量的帧不判定为语音，-80 ~ -10
     vad_rms_dbfs: int = -45
 
+    # 识别总开关
+    asr_enabled: bool = True
+
+    # 只在指定时段识别（按容器本地时间）
+    asr_schedule_enabled: bool = False
+    asr_start_time: str = "08:00"
+    asr_end_time: str = "22:00"
+
     # HTTP 服务端口
     http_port: int = 8000
 

@@ -14,6 +14,7 @@
 - WebSocket 实时字幕
 - **实时监听**：点页面上的「🔊 监听」可直接收听摄像头声音，无需等识别
 - **运行日志页**：在网页查看容器日志（最近 1000 行），包含 ffmpeg 拉流错误，支持暂停和清空，不用再 SSH
+- **识别开关 / 时间段**：顶部一键暂停识别，或只在指定时段识别（支持跨午夜）；时段外照常拉流和监听
 - 识别异步队列，慢接口不会阻塞音频采集
 - 多架构 Docker 镜像（linux/amd64、linux/arm/v7）
 
@@ -89,6 +90,10 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `VAD_SILENCE_FRAMES` | `10` | 静音多少帧判定一句结束 |
 | `VAD_MIN_SPEECH_FRAMES` | `3` | 有效语音最少帧数 |
 | `VAD_RMS_DBFS` | `-45` | 能量门限（dBFS），低于该音量不算语音 |
+| `ASR_ENABLED` | `true` | 识别总开关 |
+| `ASR_SCHEDULE_ENABLED` | `false` | 是否只在指定时段识别 |
+| `ASR_START_TIME` | `08:00` | 识别时段开始（容器本地时间） |
+| `ASR_END_TIME` | `22:00` | 识别时段结束，支持跨午夜 |
 | `HTTP_PORT` | `8000` | 服务端口 |
 | `DB_PATH` | `/data/asr.db` | 数据库路径 |
 | `SETTINGS_PATH` | `/data/settings.json` | Web 设置持久化路径 |
