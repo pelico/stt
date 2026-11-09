@@ -1,0 +1,17 @@
+services:
+  stt:
+    image: ghcr.io/pelico/stt:latest
+    container_name: rtsp-stt
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - RTSP_URL=rtsp://192.168.1.100:8554/live
+      - DASHSCOPE_API_KEY=your_api_key_here
+      - ASR_MODEL=paraformer-realtime-v2
+      - VAD_MODE=3
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/data
+    # 如果需要使用宿主机网络（例如 RTSP 在本地），可取消注释下一行
+    # network_mode: host

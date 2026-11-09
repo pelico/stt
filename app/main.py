@@ -1,0 +1,153 @@
+"""FastAPI 应用入口。"""
+import asyncio
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import List
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.config import settings
+from app.database import init_db, save_transcript, list_transcripts
+from app.stream import AudioStreamer
+from app.asr import get_asr
+
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("stt")
+
+# 活跃的 WebSocket 连接
+_active_clients: List[WebSocket] = []
+
+# 拉流任务引用
+_streamer: AudioStreamer | None = None
+_stream_task: asyncio.Task | None = None
+
+
+async def on_speech_segment(audio_data: bytes):
+    """收到一段语音后的处理：识别 -> 存库 -> 推送前端。"""
+    duration_sec = len(audio_data) / (settings.sample_rate * 2)
+    logger.info("收到语音段: %.1f 秒", duration_sec)
+
+    try:
+        text = await get_asr().recognize(audio_data)
+    except Exception as e:
+        logger.error("ASR 识别失败: %s", e)
+        text = ""
+
+    if not text:
+        logger.debug("识别结果为空，跳过")
+        return
+
+    logger.info("识别结果: %s", text)
+
+    # 保存到数据库
+    try:
+        record = save_transcript(text=text, duration_sec=int(duration_sec))
+    except Exception as e:
+        logger.error("保存数据库失败: %s", e)
+        record = None
+
+    # 推送给所有前端
+    message = {
+        "type": "transcript",
+        "text": text,
+        "timestamp": record.timestamp.isoformat() if record else None,
+        "duration_sec": int(duration_sec),
+        "id": record.id if record else None,
+    }
+    for ws in list(_active_clients):
+        try:
+            await ws.send_json(message)
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 初始化数据库
+    init_db()
+    logger.info("数据库初始化完成: %s", settings.db_path)
+
+    # 启动音频拉流
+    global _streamer, _stream_task
+    _streamer = AudioStreamer(on_speech_segment=on_speech_segment)
+    _stream_task = asyncio.create_task(_streamer.start())
+    logger.info("音频拉流已启动，RTSP: %s", settings.rtsp_url)
+
+    yield
+
+    # 停止拉流
+    if _streamer:
+        _streamer.stop()
+    if _stream_task:
+        _stream_task.cancel()
+        try:
+            await _stream_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="RTSP STT", lifespan=lifespan)
+
+# 静态文件
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+@app.get("/")
+async def index():
+    return FileResponse(os.path.join(static_dir, "index.html"))
+
+
+@app.get("/api/transcripts")
+async def get_transcripts(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    keyword: str = Query(None),
+):
+    """查询历史识别记录。"""
+    records = list_transcripts(limit=limit, offset=offset, keyword=keyword)
+    return {"items": [r.to_dict() for r in records], "total": len(records)}
+
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "ok",
+        "rtsp_url": settings.rtsp_url,
+        "asr_engine": settings.asr_engine,
+        "api_key_set": bool(settings.dashscope_api_key),
+        "stream_running": bool(_stream_task and not _stream_task.done()),
+    }
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    _active_clients.append(ws)
+    logger.info("WebSocket 客户端连接，当前 %d 个", len(_active_clients))
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if ws in _active_clients:
+            _active_clients.remove(ws)
+        logger.info("WebSocket 客户端断开，剩余 %d 个", len(_active_clients))
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=settings.http_port,
+        log_level=settings.log_level.lower(),
+    )
