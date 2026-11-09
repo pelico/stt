@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db, save_transcript, list_transcripts, iso_utc
 from app.logbuffer import BufferHandler, LogBuffer
+from app.rtsp_history import add_history, list_history, remove_history
 from app.stream import AudioStreamer
 from app.runtime_config import get_runtime, ENGINES, asr_active, in_schedule
 from app.asr import get_asr
@@ -149,6 +150,9 @@ async def lifespan(app: FastAPI):
         should_stream=lambda: in_schedule(get_runtime()),
         on_stream_state=on_stream_state,
     )
+    # 记录当前地址到历史，方便下次切换
+    add_history(cfg.get("rtsp_url"))
+
     _stream_task = asyncio.create_task(_streamer.start())
     logger.info(
         "音频拉流已启动，RTSP: %s，引擎: %s",
@@ -202,6 +206,18 @@ async def read_settings():
     }
 
 
+@app.get("/api/rtsp-history")
+async def get_rtsp_history():
+    """最近使用过的 RTSP 地址，最近的在最前。"""
+    return {"items": list_history()}
+
+
+@app.delete("/api/rtsp-history")
+async def delete_rtsp_history(url: str = Query(...)):
+    """删除一条历史地址。"""
+    return {"items": remove_history(url)}
+
+
 @app.post("/api/settings")
 async def update_settings(patch: dict):
     """增量更新配置，立即生效。敏感字段留空表示不修改。"""
@@ -210,6 +226,8 @@ async def update_settings(patch: dict):
         changed = cfg.update(patch)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if "rtsp_url" in changed:
+        add_history(cfg.get("rtsp_url"))
     return {
         "changed": changed,
         "values": cfg.snapshot(mask=True),

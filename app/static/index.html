@@ -55,6 +55,8 @@
     cursor: pointer;
   }
   .check-row input { width: 16px; height: 16px; accent-color: #3b82f6; }
+  .history-row { display: flex; gap: 8px; margin-top: 8px; }
+  .history-row select { flex: 1; min-width: 0; }
 
   .banner {
     display: none;
@@ -405,7 +407,13 @@
       <div class="field">
         <label>RTSP 地址</label>
         <input type="text" id="rtsp_url" placeholder="rtsp://192.168.1.100:8554/live" />
-        <div class="hint">修改后会自动重连拉流。</div>
+        <div class="history-row">
+          <select id="rtsp-history-select">
+            <option value="">从历史地址选择…</option>
+          </select>
+          <button type="button" class="icon-btn" id="rtsp-history-delete">删除</button>
+        </div>
+        <div class="hint">修改后会自动重连拉流。最近使用的 10 个地址会自动记录。</div>
       </div>
     </div>
 
@@ -770,12 +778,47 @@ function syncVadLabels() {
   document.getElementById('min_speech_ms_val').textContent = (minSpeech * frameMs) + ' ms';
 }
 
+async function loadRtspHistory() {
+  const sel = document.getElementById('rtsp-history-select');
+  try {
+    const res = await fetch('/api/rtsp-history');
+    const data = await res.json();
+    sel.innerHTML = '<option value="">从历史地址选择…</option>';
+    (data.items || []).forEach((url) => {
+      const opt = document.createElement('option');
+      opt.value = url;
+      opt.textContent = url;
+      sel.appendChild(opt);
+    });
+    sel.value = '';
+  } catch (e) {
+    /* 忽略 */
+  }
+}
+
+async function deleteRtspHistory() {
+  const sel = document.getElementById('rtsp-history-select');
+  if (!sel.value) {
+    showToast('请先在下拉框选择要删除的地址', true);
+    return;
+  }
+  if (!confirm(`确定删除这条历史地址？\n\n${sel.value}`)) return;
+  try {
+    await fetch(`/api/rtsp-history?url=${encodeURIComponent(sel.value)}`, { method: 'DELETE' });
+    await loadRtspHistory();
+    showToast('已删除历史地址');
+  } catch (e) {
+    showToast('删除失败', true);
+  }
+}
+
 async function loadSettings() {
   const res = await fetch('/api/settings');
   const data = await res.json();
   const v = data.values;
 
   document.getElementById('rtsp_url').value = v.rtsp_url || '';
+  loadRtspHistory();
   document.getElementById('asr_engine').value = v.asr_engine || 'aliyun';
   document.getElementById('asr_model').value = v.asr_model || '';
   document.getElementById('tencent_region').value = v.tencent_region || '';
@@ -939,6 +982,10 @@ function closeDrawer() {
 }
 
 document.getElementById('open-settings').addEventListener('click', openDrawer);
+document.getElementById('rtsp-history-select').addEventListener('change', (e) => {
+  if (e.target.value) document.getElementById('rtsp_url').value = e.target.value;
+});
+document.getElementById('rtsp-history-delete').addEventListener('click', deleteRtspHistory);
 asrToggle.addEventListener('click', toggleAsr);
 document.getElementById('open-logs').addEventListener('click', openLogs);
 document.getElementById('log-close').addEventListener('click', closeLogs);
