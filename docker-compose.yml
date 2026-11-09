@@ -7,11 +7,16 @@ services:
       - "8000:8000"
     environment:
       - RTSP_URL=rtsp://192.168.1.100:8554/live
+      # 三选一：aliyun / tencent / openai（也可启动后在 Web 设置页修改）
+      - ASR_ENGINE=aliyun
       - DASHSCOPE_API_KEY=your_api_key_here
-      - ASR_MODEL=paraformer-realtime-v2
+      # - TENCENT_SECRET_ID=
+      # - TENCENT_SECRET_KEY=
+      # - OPENAI_BASE_URL=https://api.openai.com/v1
+      # - OPENAI_API_KEY=
       - VAD_MODE=3
       - LOG_LEVEL=INFO
     volumes:
       - ./data:/data
-    # 如果需要使用宿主机网络（例如 RTSP 在本地），可取消注释下一行
+    # 如果 RTSP 服务在宿主机上，可改用 host 网络
     # network_mode: host

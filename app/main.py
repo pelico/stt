@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db, save_transcript, list_transcripts
 from app.stream import AudioStreamer
+from app.runtime_config import get_runtime, ENGINES
 from app.asr import get_asr
 
 logging.basicConfig(
@@ -28,13 +29,25 @@ _streamer: AudioStreamer | None = None
 _stream_task: asyncio.Task | None = None
 
 
+def _engine_ready(cfg) -> bool:
+    engine = cfg.get("asr_engine")
+    if engine == "aliyun":
+        return bool(cfg.get("dashscope_api_key"))
+    if engine == "tencent":
+        return bool(cfg.get("tencent_secret_id") and cfg.get("tencent_secret_key"))
+    if engine == "openai":
+        return bool(cfg.get("openai_base_url") and cfg.get("openai_api_key"))
+    return False
+
+
 async def on_speech_segment(audio_data: bytes):
     """收到一段语音后的处理：识别 -> 存库 -> 推送前端。"""
+    cfg = get_runtime()
     duration_sec = len(audio_data) / (settings.sample_rate * 2)
     logger.info("收到语音段: %.1f 秒", duration_sec)
 
     try:
-        text = await get_asr().recognize(audio_data)
+        text = await get_asr(cfg).recognize(audio_data)
     except Exception as e:
         logger.error("ASR 识别失败: %s", e)
         text = ""
@@ -45,14 +58,16 @@ async def on_speech_segment(audio_data: bytes):
 
     logger.info("识别结果: %s", text)
 
-    # 保存到数据库
     try:
-        record = save_transcript(text=text, duration_sec=int(duration_sec))
+        record = save_transcript(
+            text=text,
+            duration_sec=int(duration_sec),
+            engine=cfg.get("asr_engine"),
+        )
     except Exception as e:
         logger.error("保存数据库失败: %s", e)
         record = None
 
-    # 推送给所有前端
     message = {
         "type": "transcript",
         "text": text,
@@ -67,21 +82,32 @@ async def on_speech_segment(audio_data: bytes):
             pass
 
 
+def _on_config_change(changed: List[str]):
+    """配置热更新回调。"""
+    if "rtsp_url" in changed and _streamer is not None:
+        logger.info("RTSP 地址已变更，重启拉流")
+        _streamer.restart()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 初始化数据库
     init_db()
     logger.info("数据库初始化完成: %s", settings.db_path)
 
-    # 启动音频拉流
+    cfg = get_runtime()
+    cfg.subscribe(_on_config_change)
+
     global _streamer, _stream_task
-    _streamer = AudioStreamer(on_speech_segment=on_speech_segment)
+    _streamer = AudioStreamer(on_speech_segment=on_speech_segment, cfg=cfg)
     _stream_task = asyncio.create_task(_streamer.start())
-    logger.info("音频拉流已启动，RTSP: %s", settings.rtsp_url)
+    logger.info(
+        "音频拉流已启动，RTSP: %s，引擎: %s",
+        cfg.get("rtsp_url"),
+        cfg.get("asr_engine"),
+    )
 
     yield
 
-    # 停止拉流
     if _streamer:
         _streamer.stop()
     if _stream_task:
@@ -94,7 +120,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RTSP STT", lifespan=lifespan)
 
-# 静态文件
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -115,13 +140,40 @@ async def get_transcripts(
     return {"items": [r.to_dict() for r in records], "total": len(records)}
 
 
+@app.get("/api/settings")
+async def read_settings():
+    """读取当前配置，敏感字段打码。"""
+    cfg = get_runtime()
+    return {
+        "values": cfg.snapshot(mask=True),
+        "engines": list(ENGINES),
+        "engine_ready": _engine_ready(cfg),
+    }
+
+
+@app.post("/api/settings")
+async def update_settings(patch: dict):
+    """增量更新配置，立即生效。敏感字段留空表示不修改。"""
+    cfg = get_runtime()
+    try:
+        changed = cfg.update(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "changed": changed,
+        "values": cfg.snapshot(mask=True),
+        "engine_ready": _engine_ready(cfg),
+    }
+
+
 @app.get("/api/health")
 async def health():
+    cfg = get_runtime()
     return {
         "status": "ok",
-        "rtsp_url": settings.rtsp_url,
-        "asr_engine": settings.asr_engine,
-        "api_key_set": bool(settings.dashscope_api_key),
+        "rtsp_url": cfg.get("rtsp_url"),
+        "asr_engine": cfg.get("asr_engine"),
+        "engine_ready": _engine_ready(cfg),
         "stream_running": bool(_stream_task and not _stream_task.done()),
     }
 

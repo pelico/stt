@@ -32,6 +32,27 @@
   }
   .status.connected { background: #166534; }
   .status.disconnected { background: #991b1b; }
+  .spacer { flex: 1; }
+  .icon-btn {
+    background: #334155;
+    color: #e2e8f0;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .icon-btn:hover { background: #475569; }
+
+  .banner {
+    display: none;
+    background: #78350f;
+    color: #fde68a;
+    font-size: 13px;
+    padding: 8px 24px;
+    border-bottom: 1px solid #92400e;
+  }
+  .banner.show { display: block; }
 
   main {
     flex: 1;
@@ -40,7 +61,6 @@
     padding: 16px;
     overflow: hidden;
   }
-
   .live-panel {
     flex: 1;
     background: #1e293b;
@@ -57,11 +77,7 @@
     font-size: 14px;
     color: #94a3b8;
   }
-  .live-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-  }
+  .live-content { flex: 1; overflow-y: auto; padding: 16px; }
   .live-item {
     margin-bottom: 16px;
     padding: 12px 16px;
@@ -70,23 +86,15 @@
     border-radius: 4px;
     animation: fadeIn 0.3s ease;
   }
-  .live-item .time {
-    font-size: 11px;
-    color: #64748b;
-    margin-bottom: 4px;
-  }
-  .live-item .text {
-    font-size: 16px;
-    line-height: 1.6;
-    word-break: break-word;
-  }
+  .live-item .time { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+  .live-item .text { font-size: 16px; line-height: 1.6; word-break: break-word; }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
   .history-panel {
-    width: 400px;
+    width: 380px;
     background: #1e293b;
     border-radius: 8px;
     border: 1px solid #334155;
@@ -94,10 +102,7 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .history-search {
-    padding: 12px 16px;
-    border-bottom: 1px solid #334155;
-  }
+  .history-search { padding: 12px 16px; border-bottom: 1px solid #334155; }
   .history-search input {
     width: 100%;
     padding: 8px 12px;
@@ -109,11 +114,7 @@
     outline: none;
   }
   .history-search input:focus { border-color: #3b82f6; }
-  .history-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px 0;
-  }
+  .history-list { flex: 1; overflow-y: auto; padding: 8px 0; }
   .history-item {
     padding: 10px 16px;
     border-bottom: 1px solid #334155;
@@ -121,11 +122,7 @@
     transition: background 0.15s;
   }
   .history-item:hover { background: #334155; }
-  .history-item .time {
-    font-size: 11px;
-    color: #64748b;
-    margin-bottom: 2px;
-  }
+  .history-item .time { font-size: 11px; color: #64748b; margin-bottom: 2px; }
   .history-item .text {
     font-size: 13px;
     color: #cbd5e1;
@@ -135,24 +132,132 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  .empty { color: #64748b; text-align: center; padding: 40px 16px; font-size: 13px; }
 
-  .empty {
-    color: #64748b;
-    text-align: center;
-    padding: 40px 16px;
-    font-size: 13px;
+  /* 设置抽屉 */
+  .drawer-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+    z-index: 10;
   }
+  .drawer-mask.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 440px;
+    max-width: 92vw;
+    background: #1e293b;
+    border-left: 1px solid #334155;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    z-index: 11;
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid #334155;
+    font-weight: 600;
+  }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .drawer-foot {
+    padding: 12px 20px;
+    border-top: 1px solid #334155;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+  .group { margin-bottom: 24px; }
+  .group-title {
+    font-size: 12px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block;
+    font-size: 13px;
+    color: #cbd5e1;
+    margin-bottom: 6px;
+  }
+  .field input[type=text], .field input[type=password], .field input[type=number], .field select {
+    width: 100%;
+    padding: 8px 10px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 5px;
+    color: #e2e8f0;
+    font-size: 13px;
+    outline: none;
+  }
+  .field input:focus, .field select:focus { border-color: #3b82f6; }
+  .field input[type=range] { width: 100%; accent-color: #3b82f6; }
+  .hint { font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.5; }
+  .value-tag { color: #60a5fa; font-weight: 600; }
+  .primary-btn {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .primary-btn:hover { background: #1d4ed8; }
+  .secondary-btn {
+    background: transparent;
+    color: #94a3b8;
+    border: 1px solid #334155;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .secondary-btn:hover { background: #334155; }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 32px;
+    transform: translateX(-50%) translateY(20px);
+    background: #166534;
+    color: #dcfce7;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.25s;
+    z-index: 20;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.error { background: #991b1b; color: #fee2e2; }
 </style>
 </head>
 <body>
 <header>
   <h1>🎙️ RTSP 语音转文字</h1>
   <span id="status" class="status disconnected">未连接</span>
+  <span id="engine-tag" class="status">引擎: -</span>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="open-settings">⚙ 设置</button>
 </header>
+<div id="engine-banner" class="banner">当前识别引擎未配置密钥，语音不会被识别。点击右上角「设置」配置。</div>
+
 <main>
   <div class="live-panel">
     <div class="panel-title">实时字幕</div>
@@ -170,29 +275,148 @@
   </div>
 </main>
 
+<div class="drawer-mask" id="drawer-mask"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <span>设置</span>
+    <button class="secondary-btn" id="close-settings">关闭</button>
+  </div>
+  <div class="drawer-body">
+    <div class="group">
+      <div class="group-title">音频源</div>
+      <div class="field">
+        <label>RTSP 地址</label>
+        <input type="text" id="rtsp_url" placeholder="rtsp://192.168.1.100:8554/live" />
+        <div class="hint">修改后会自动重连拉流。</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">识别引擎</div>
+      <div class="field">
+        <label>引擎</label>
+        <select id="asr_engine">
+          <option value="aliyun">阿里云百炼（实时，10 小时/月免费）</option>
+          <option value="tencent">腾讯云一句话识别（5000 次/月免费）</option>
+          <option value="openai">OpenAI 兼容接口</option>
+        </select>
+      </div>
+
+      <div class="engine-panel" data-engine="aliyun">
+        <div class="field">
+          <label>DashScope API Key</label>
+          <input type="password" id="dashscope_api_key" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>模型</label>
+          <input type="text" id="asr_model" placeholder="paraformer-realtime-v2" />
+        </div>
+      </div>
+
+      <div class="engine-panel" data-engine="tencent">
+        <div class="field">
+          <label>SecretId</label>
+          <input type="password" id="tencent_secret_id" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>SecretKey</label>
+          <input type="password" id="tencent_secret_key" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>地域</label>
+          <input type="text" id="tencent_region" placeholder="ap-shanghai" />
+        </div>
+        <div class="hint">腾讯云控制台 → 访问管理 → API 密钥管理。语音识别需开通「一句话识别」。</div>
+      </div>
+
+      <div class="engine-panel" data-engine="openai">
+        <div class="field">
+          <label>接口地址</label>
+          <input type="text" id="openai_base_url" placeholder="https://api.openai.com/v1" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" id="openai_api_key" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>模型</label>
+          <input type="text" id="openai_model" placeholder="whisper-1" />
+        </div>
+        <div class="hint">填兼容 /audio/transcriptions 的服务地址，可指向中转或自建服务。</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">VAD 静音检测</div>
+      <div class="field">
+        <label>灵敏度 <span class="value-tag" id="vad_mode_val">3</span></label>
+        <input type="range" id="vad_mode" min="0" max="3" step="1" />
+        <div class="hint">0 最灵敏（小声也会识别，噪声多），3 最严格（嘈杂环境更干净）。</div>
+      </div>
+      <div class="field">
+        <label>分析帧长（毫秒）</label>
+        <select id="vad_frame_ms">
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="30">30</option>
+        </select>
+        <div class="hint">一般保持 30 即可。</div>
+      </div>
+      <div class="field">
+        <label>断句静音时长 <span class="value-tag" id="silence_ms_val">300 ms</span></label>
+        <input type="range" id="vad_silence_frames" min="3" max="60" step="1" />
+        <div class="hint">静音持续多久认为一句话结束。调小断句快，调大句子更完整。</div>
+      </div>
+      <div class="field">
+        <label>最短语音 <span class="value-tag" id="min_speech_ms_val">90 ms</span></label>
+        <input type="range" id="vad_min_speech_frames" min="1" max="30" step="1" />
+        <div class="hint">低于此时长的声音会被忽略，可过滤咳嗽、开关门等短噪声。</div>
+      </div>
+      <div class="hint">这些参数保存后立即生效，无需重启容器。</div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <button class="secondary-btn" id="cancel-settings">取消</button>
+    <button class="primary-btn" id="save-settings">保存并应用</button>
+  </div>
+</aside>
+<div class="toast" id="toast"></div>
+
 <script>
 const liveContent = document.getElementById('live-content');
 const historyList = document.getElementById('history-list');
 const statusEl = document.getElementById('status');
+const engineTag = document.getElementById('engine-tag');
+const engineBanner = document.getElementById('engine-banner');
 const searchInput = document.getElementById('search');
+const drawer = document.getElementById('drawer');
+const drawerMask = document.getElementById('drawer-mask');
+const toastEl = document.getElementById('toast');
+
+const ENGINE_LABELS = { aliyun: '阿里云', tencent: '腾讯云', openai: 'OpenAI 兼容' };
+const SECRET_FIELDS = ['dashscope_api_key', 'tencent_secret_id', 'tencent_secret_key', 'openai_api_key'];
 
 let ws = null;
 let searchTimer = null;
+let currentEngine = 'aliyun';
 
 function setStatus(connected) {
   statusEl.textContent = connected ? '已连接' : '未连接';
   statusEl.className = 'status ' + (connected ? 'connected' : 'disconnected');
 }
 
+function showToast(msg, isError = false) {
+  toastEl.textContent = msg;
+  toastEl.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => { toastEl.className = 'toast'; }, 2500);
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws`);
-
   ws.onopen = () => setStatus(true);
-  ws.onclose = () => {
-    setStatus(false);
-    setTimeout(connectWS, 3000);
-  };
+  ws.onclose = () => { setStatus(false); setTimeout(connectWS, 3000); };
   ws.onerror = () => setStatus(false);
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
@@ -206,6 +430,7 @@ function connectWS() {
 function fmtTime(iso) {
   if (!iso) return new Date().toLocaleTimeString('zh-CN');
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
   return d.toLocaleString('zh-CN', { hour12: false });
 }
 
@@ -214,22 +439,18 @@ function addLiveItem(msg) {
   if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'live-item';
-  div.innerHTML = `
-    <div class="time">${fmtTime(msg.timestamp)}</div>
-    <div class="text"></div>
-  `;
+  div.innerHTML = `<div class="time">${fmtTime(msg.timestamp)}</div><div class="text"></div>`;
   div.querySelector('.text').textContent = msg.text;
   liveContent.appendChild(div);
   liveContent.scrollTop = liveContent.scrollHeight;
 }
 
 function prependHistoryItem(msg) {
+  const empty = historyList.querySelector('.empty');
+  if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'history-item';
-  div.innerHTML = `
-    <div class="time">${fmtTime(msg.timestamp)}</div>
-    <div class="text"></div>
-  `;
+  div.innerHTML = `<div class="time">${fmtTime(msg.timestamp)}</div><div class="text"></div>`;
   div.querySelector('.text').textContent = msg.text;
   historyList.insertBefore(div, historyList.firstChild);
 }
@@ -254,9 +475,115 @@ searchInput.addEventListener('input', () => {
   searchTimer = setTimeout(() => loadHistory(searchInput.value.trim()), 300);
 });
 
-// 初始化
+/* ---------- 设置 ---------- */
+function applyEnginePanels(engine) {
+  currentEngine = engine;
+  document.querySelectorAll('.engine-panel').forEach(el => {
+    el.style.display = el.dataset.engine === engine ? 'block' : 'none';
+  });
+  engineTag.textContent = '引擎: ' + (ENGINE_LABELS[engine] || engine);
+}
+
+function syncVadLabels() {
+  const frameMs = parseInt(document.getElementById('vad_frame_ms').value, 10);
+  document.getElementById('vad_mode_val').textContent = document.getElementById('vad_mode').value;
+  const silenceFrames = parseInt(document.getElementById('vad_silence_frames').value, 10);
+  const minSpeech = parseInt(document.getElementById('vad_min_speech_frames').value, 10);
+  document.getElementById('silence_ms_val').textContent = (silenceFrames * frameMs) + ' ms';
+  document.getElementById('min_speech_ms_val').textContent = (minSpeech * frameMs) + ' ms';
+}
+
+async function loadSettings() {
+  const res = await fetch('/api/settings');
+  const data = await res.json();
+  const v = data.values;
+
+  document.getElementById('rtsp_url').value = v.rtsp_url || '';
+  document.getElementById('asr_engine').value = v.asr_engine || 'aliyun';
+  document.getElementById('asr_model').value = v.asr_model || '';
+  document.getElementById('tencent_region').value = v.tencent_region || '';
+  document.getElementById('openai_base_url').value = v.openai_base_url || '';
+  document.getElementById('openai_model').value = v.openai_model || '';
+
+  SECRET_FIELDS.forEach(id => {
+    const input = document.getElementById(id);
+    input.value = '';
+    if (v[id]) {
+      input.placeholder = `${v[id]}（已配置，留空不修改）`;
+    } else {
+      input.placeholder = '未配置';
+    }
+  });
+
+  document.getElementById('vad_mode').value = v.vad_mode;
+  document.getElementById('vad_frame_ms').value = v.vad_frame_ms;
+  document.getElementById('vad_silence_frames').value = v.vad_silence_frames;
+  document.getElementById('vad_min_speech_frames').value = v.vad_min_speech_frames;
+  syncVadLabels();
+
+  applyEnginePanels(v.asr_engine || 'aliyun');
+  engineBanner.className = 'banner' + (data.engine_ready ? '' : ' show');
+}
+
+async function saveSettings() {
+  const patch = {
+    rtsp_url: document.getElementById('rtsp_url').value.trim(),
+    asr_engine: document.getElementById('asr_engine').value,
+    asr_model: document.getElementById('asr_model').value.trim(),
+    tencent_region: document.getElementById('tencent_region').value.trim(),
+    openai_base_url: document.getElementById('openai_base_url').value.trim(),
+    openai_model: document.getElementById('openai_model').value.trim(),
+    vad_mode: parseInt(document.getElementById('vad_mode').value, 10),
+    vad_frame_ms: parseInt(document.getElementById('vad_frame_ms').value, 10),
+    vad_silence_frames: parseInt(document.getElementById('vad_silence_frames').value, 10),
+    vad_min_speech_frames: parseInt(document.getElementById('vad_min_speech_frames').value, 10),
+  };
+  SECRET_FIELDS.forEach(id => {
+    const value = document.getElementById(id).value.trim();
+    if (value) patch[id] = value;
+  });
+
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '保存失败');
+    showToast(data.changed.length ? `已生效：${data.changed.length} 项配置` : '没有变化');
+    await loadSettings();
+    closeDrawer();
+  } catch (e) {
+    showToast(e.message, true);
+  }
+}
+
+function openDrawer() {
+  drawer.classList.add('open');
+  drawerMask.classList.add('open');
+  loadSettings().catch(() => showToast('读取设置失败', true));
+}
+function closeDrawer() {
+  drawer.classList.remove('open');
+  drawerMask.classList.remove('open');
+}
+
+document.getElementById('open-settings').addEventListener('click', openDrawer);
+document.getElementById('close-settings').addEventListener('click', closeDrawer);
+document.getElementById('cancel-settings').addEventListener('click', closeDrawer);
+drawerMask.addEventListener('click', closeDrawer);
+document.getElementById('save-settings').addEventListener('click', saveSettings);
+document.getElementById('asr_engine').addEventListener('change', (e) => applyEnginePanels(e.target.value));
+['vad_mode', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames'].forEach(id => {
+  document.getElementById(id).addEventListener('input', syncVadLabels);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+
+/* 初始化 */
 connectWS();
 loadHistory();
+loadSettings().catch(() => {});
 </script>
 </body>
 </html>
