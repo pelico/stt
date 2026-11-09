@@ -1,6 +1,6 @@
 """SQLite 数据库模型与操作。"""
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
@@ -9,6 +9,15 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from app.config import settings
 
 Base = declarative_base()
+
+
+def iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """序列化为带时区的 ISO 时间，避免前端按本地时间误解。"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 
 class Transcript(Base):
@@ -25,7 +34,7 @@ class Transcript(Base):
     def to_dict(self):
         return {
             "id": self.id,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "timestamp": iso_utc(self.timestamp),
             "text": self.text,
             "duration_sec": self.duration_sec,
             "audio_path": self.audio_path,

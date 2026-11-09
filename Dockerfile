@@ -1,30 +1,37 @@
+# ---- 构建阶段：编译 webrtcvad 等需要 C 扩展的依赖 ----
+FROM python:3.11-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt .
+# 把所有依赖预先编译成 wheel，运行阶段无需 gcc
+RUN pip wheel --no-cache-dir -r requirements.txt -w /wheels
+
+# ---- 运行阶段：只保留 ffmpeg 和编译好的 wheel ----
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# 安装 ffmpeg 和编译依赖（webrtcvad 需要 gcc）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 先装依赖（利用缓存）
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt \
+    && rm -rf /wheels
 
-# 编译完成后卸载编译工具，减小镜像体积
-RUN apt-get remove -y build-essential \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
-
-# 拷贝代码
 COPY app/ ./app/
 
-# 数据目录
 RUN mkdir -p /data/audio
 
 EXPOSE 8000

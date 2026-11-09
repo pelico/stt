@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import init_db, save_transcript, list_transcripts
+from app.database import init_db, save_transcript, list_transcripts, iso_utc
 from app.stream import AudioStreamer
 from app.runtime_config import get_runtime, ENGINES
 from app.asr import get_asr
@@ -80,7 +80,7 @@ async def on_speech_segment(audio_data: bytes):
     message = {
         "type": "transcript",
         "text": text,
-        "timestamp": record.timestamp.isoformat() if record else None,
+        "timestamp": iso_utc(record.timestamp) if record else None,
         "duration_sec": int(duration_sec),
         "id": record.id if record else None,
     }
