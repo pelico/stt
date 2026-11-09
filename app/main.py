@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import init_db, save_transcript, list_transcripts, iso_utc
+from app.logbuffer import BufferHandler, LogBuffer
 from app.stream import AudioStreamer
 from app.runtime_config import get_runtime, ENGINES
 from app.asr import get_asr
@@ -21,6 +22,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("stt")
+
+# 供 Web 页面查看的运行日志（仅内存，重启清空）
+log_buffer = LogBuffer(capacity=1000)
+_buffer_handler = BufferHandler(log_buffer)
+_buffer_handler.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
+logging.getLogger().addHandler(_buffer_handler)
 
 # 活跃的 WebSocket 连接
 _active_clients: List[WebSocket] = []
@@ -197,6 +204,24 @@ async def update_settings(patch: dict):
         "values": cfg.snapshot(mask=True),
         "engine_ready": _engine_ready(cfg),
     }
+
+
+@app.get("/api/logs")
+async def get_logs(
+    after: int = Query(0, ge=0),
+    limit: int = Query(300, ge=1, le=1000),
+):
+    """增量拉取运行日志。after 为上次拿到的最大 id。"""
+    return {
+        "items": log_buffer.since(after=after, limit=limit),
+        "last_id": log_buffer.last_id,
+    }
+
+
+@app.delete("/api/logs")
+async def clear_logs():
+    """清空页面日志缓冲，不影响 docker logs。"""
+    return {"cleared": True, "last_id": log_buffer.clear()}
 
 
 @app.get("/api/health")

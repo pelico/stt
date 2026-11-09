@@ -169,6 +169,60 @@
   ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
   .empty { color: #64748b; text-align: center; padding: 40px 16px; font-size: 13px; }
 
+  /* 日志面板 */
+  .log-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+    z-index: 12;
+  }
+  .log-mask.open { opacity: 1; pointer-events: auto; }
+  .log-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 55vh;
+    background: #0b1220;
+    border-top: 1px solid #334155;
+    transform: translateY(100%);
+    transition: transform 0.25s ease;
+    z-index: 13;
+    display: flex;
+    flex-direction: column;
+  }
+  .log-panel.open { transform: translateY(0); }
+  .log-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #334155;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .log-meta { font-size: 11px; font-weight: 400; color: #64748b; }
+  .log-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .log-line { display: flex; gap: 8px; white-space: pre-wrap; word-break: break-word; }
+  .log-line .t { color: #475569; flex: none; }
+  .log-line .lv { flex: none; width: 52px; }
+  .log-line .lv.INFO { color: #60a5fa; }
+  .log-line .lv.WARNING { color: #fbbf24; }
+  .log-line .lv.ERROR { color: #f87171; }
+  .log-line .lv.CRITICAL { color: #f87171; }
+  .log-line .lv.DEBUG { color: #64748b; }
+  .log-line .m { flex: 1; color: #cbd5e1; }
+
   /* 设置抽屉 */
   .drawer-mask {
     position: fixed;
@@ -287,6 +341,7 @@
   <span id="engine-tag" class="status">引擎: -</span>
   <div class="spacer"></div>
   <button class="icon-btn" id="listen-btn" title="实时收听摄像头声音">🔊 监听</button>
+  <button class="icon-btn" id="open-logs" title="查看容器运行日志">📜 日志</button>
   <button class="icon-btn" id="open-settings">⚙ 设置</button>
 </header>
 <div id="engine-banner" class="banner">当前识别引擎未配置密钥，语音不会被识别。点击右上角「设置」配置。</div>
@@ -312,6 +367,19 @@
     <div id="history-list" class="history-list"></div>
   </div>
 </main>
+
+<div class="log-mask" id="log-mask"></div>
+<section class="log-panel" id="log-panel">
+  <div class="log-head">
+    <span>运行日志</span>
+    <span class="log-meta">最近 1000 行 · 内存缓冲，重启容器后清空</span>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="log-pause">暂停</button>
+    <button class="icon-btn" id="log-clear">清空</button>
+    <button class="icon-btn" id="log-close">关闭</button>
+  </div>
+  <div class="log-body" id="log-body"></div>
+</section>
 
 <div class="drawer-mask" id="drawer-mask"></div>
 <aside class="drawer" id="drawer">
@@ -439,6 +507,10 @@ const drawer = document.getElementById('drawer');
 const drawerMask = document.getElementById('drawer-mask');
 const toastEl = document.getElementById('toast');
 const listenBtn = document.getElementById('listen-btn');
+const logPanel = document.getElementById('log-panel');
+const logMask = document.getElementById('log-mask');
+const logBody = document.getElementById('log-body');
+const logPauseBtn = document.getElementById('log-pause');
 
 const ENGINE_LABELS = { aliyun: '阿里云', tencent: '腾讯云', openai: 'OpenAI 兼容' };
 const SECRET_FIELDS = ['dashscope_api_key', 'tencent_secret_id', 'tencent_secret_key', 'openai_api_key'];
@@ -684,6 +756,88 @@ async function saveSettings() {
   }
 }
 
+/* ---------- 运行日志 ---------- */
+let logTimer = null;
+let logLastId = 0;
+let logPaused = false;
+
+function appendLogLine(item) {
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  const t = document.createElement('span');
+  t.className = 't';
+  t.textContent = item.time;
+  const lv = document.createElement('span');
+  lv.className = 'lv ' + item.level;
+  lv.textContent = item.level;
+  const m = document.createElement('span');
+  m.className = 'm';
+  m.textContent = item.message;
+  div.append(t, lv, m);
+  div.title = item.logger;
+  logBody.appendChild(div);
+}
+
+async function fetchLogs() {
+  if (logPaused) return;
+  try {
+    const res = await fetch(`/api/logs?after=${logLastId}&limit=500`);
+    const data = await res.json();
+    if (!data.items.length) return;
+    const empty = logBody.querySelector('.empty');
+    if (empty) empty.remove();
+    const atBottom = logBody.scrollHeight - logBody.scrollTop - logBody.clientHeight < 40;
+    data.items.forEach(appendLogLine);
+    logLastId = data.items[data.items.length - 1].id;
+    if (atBottom) logBody.scrollTop = logBody.scrollHeight;
+  } catch (e) {
+    /* 轮询失败静默，下次继续 */
+  }
+}
+
+function openLogs() {
+  logPanel.classList.add('open');
+  logMask.classList.add('open');
+  logBody.innerHTML = '';
+  logBody.innerHTML = '<div class="empty">加载中...</div>';
+  logLastId = 0;
+  logPaused = false;
+  logPauseBtn.textContent = '暂停';
+  logPauseBtn.classList.remove('active');
+  fetchLogs().then(() => {
+    const empty = logBody.querySelector('.empty');
+    if (empty) empty.textContent = '暂无日志';
+  });
+  clearInterval(logTimer);
+  logTimer = setInterval(fetchLogs, 1500);
+}
+
+function closeLogs() {
+  logPanel.classList.remove('open');
+  logMask.classList.remove('open');
+  clearInterval(logTimer);
+  logTimer = null;
+}
+
+async function clearLogs() {
+  try {
+    const res = await fetch('/api/logs', { method: 'DELETE' });
+    const data = await res.json();
+    logLastId = data.last_id;
+    logBody.innerHTML = '<div class="empty">暂无日志</div>';
+    showToast('页面日志已清空（容器日志仍在）');
+  } catch (e) {
+    showToast('清空失败', true);
+  }
+}
+
+function toggleLogPause() {
+  logPaused = !logPaused;
+  logPauseBtn.textContent = logPaused ? '继续' : '暂停';
+  logPauseBtn.classList.toggle('active', logPaused);
+  if (!logPaused) fetchLogs();
+}
+
 function openDrawer() {
   drawer.classList.add('open');
   drawerMask.classList.add('open');
@@ -695,6 +849,11 @@ function closeDrawer() {
 }
 
 document.getElementById('open-settings').addEventListener('click', openDrawer);
+document.getElementById('open-logs').addEventListener('click', openLogs);
+document.getElementById('log-close').addEventListener('click', closeLogs);
+document.getElementById('log-clear').addEventListener('click', clearLogs);
+logPauseBtn.addEventListener('click', toggleLogPause);
+logMask.addEventListener('click', closeLogs);
 listenBtn.addEventListener('click', toggleListen);
 document.getElementById('close-settings').addEventListener('click', closeDrawer);
 document.getElementById('cancel-settings').addEventListener('click', closeDrawer);
@@ -704,7 +863,12 @@ document.getElementById('asr_engine').addEventListener('change', (e) => applyEng
 ['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames'].forEach(id => {
   document.getElementById(id).addEventListener('input', syncVadLabels);
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeDrawer();
+    closeLogs();
+  }
+});
 
 /* 初始化 */
 connectWS();
