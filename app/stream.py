@@ -153,6 +153,26 @@ class AudioStreamer:
                 pass
             self._restart.clear()
 
+    _FFMPEG_ERROR_HINTS = (
+        "error", "failed", "invalid", "unauthorized", "401", "403", "404",
+        "refused", "timed out", "no route", "could not", "denied",
+    )
+
+    async def _drain_stderr(self, proc):
+        """把 ffmpeg 的关键错误转进应用日志，方便在网页日志页排查拉流问题。"""
+        if proc.stderr is None:
+            return
+        try:
+            while True:
+                raw = await proc.stderr.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", "replace").strip()
+                if line and any(h in line.lower() for h in self._FFMPEG_ERROR_HINTS):
+                    logger.warning("ffmpeg: %s", line)
+        except asyncio.CancelledError:
+            pass
+
     async def _run_once(self):
         url = self.cfg.get("rtsp_url")
         cmd = [
@@ -171,9 +191,10 @@ class AudioStreamer:
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         proc = self._proc
+        stderr_task = asyncio.create_task(self._drain_stderr(proc))
 
         buffer = b""
         speech_buffer = b""
@@ -263,6 +284,10 @@ class AudioStreamer:
                     except Exception:
                         pass
 
+        try:
+            await asyncio.wait_for(stderr_task, timeout=2)
+        except Exception:
+            stderr_task.cancel()
         try:
             await proc.wait()
         except Exception:
