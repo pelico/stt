@@ -48,16 +48,22 @@ class AudioStreamer:
         on_speech_segment: Callable[[bytes], object],
         cfg,
         on_vad_state: Optional[Callable[[dict], object]] = None,
+        on_audio_frame: Optional[Callable[[bytes], object]] = None,
     ):
         self.cfg = cfg
         self.on_speech_segment = on_speech_segment
         self.on_vad_state = on_vad_state
+        self.on_audio_frame = on_audio_frame
         self.sample_rate = 16000
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._running = False
         self._restart = asyncio.Event()
         self._vad: Optional[webrtcvad.Vad] = None
         self._vad_mode: Optional[int] = None
+
+        # 识别任务队列：避免识别阻塞音频读取
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=20)
+        self._worker: Optional[asyncio.Task] = None
 
         # 调试统计
         self._segments = 0
@@ -98,10 +104,38 @@ class AudioStreamer:
     def stop(self):
         self._running = False
         self._kill_proc()
+        if self._worker is not None:
+            self._worker.cancel()
+            self._worker = None
+
+    async def _consume(self):
+        """后台串行识别，不阻塞音频读取。"""
+        while True:
+            segment = await self._queue.get()
+            try:
+                await self.on_speech_segment(segment)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("识别任务异常: %s", e)
+            finally:
+                self._queue.task_done()
+
+    def _enqueue(self, segment: bytes):
+        """入队；队列满时丢弃最旧的任务，保证实时性。"""
+        if self._queue.full():
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()
+                logger.warning("识别队列已满，丢弃最旧的一段")
+            except asyncio.QueueEmpty:
+                pass
+        self._queue.put_nowait(segment)
 
     async def start(self):
         """启动拉流循环。"""
         self._running = True
+        self._worker = asyncio.create_task(self._consume())
         while self._running:
             try:
                 await self._run_once()
@@ -199,7 +233,7 @@ class AudioStreamer:
                             self._segments += 1
                             self._last_duration_ms = duration_ms
                             logger.info("语音段结束: %.1f 秒", duration_ms / 1000)
-                            await self.on_speech_segment(speech_buffer)
+                            self._enqueue(speech_buffer)
                         else:
                             self._dropped += 1
                             logger.debug("丢弃过短语音段: %d ms", duration_ms)
@@ -207,6 +241,13 @@ class AudioStreamer:
                         speech_buffer = b""
                         silence_count = 0
                         speech_frames = 0
+
+                # 实时监听：把原始 PCM 帧推给订阅端
+                if self.on_audio_frame is not None:
+                    try:
+                        await self.on_audio_frame(frame)
+                    except Exception:
+                        pass
 
                 # 状态推送：上次推送超过 200ms 或语音状态变化时
                 now = loop.time()

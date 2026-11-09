@@ -43,6 +43,7 @@
     cursor: pointer;
   }
   .icon-btn:hover { background: #475569; }
+  .icon-btn.active { background: #166534; color: #dcfce7; }
 
   .banner {
     display: none;
@@ -285,6 +286,7 @@
   <span id="status" class="status disconnected">未连接</span>
   <span id="engine-tag" class="status">引擎: -</span>
   <div class="spacer"></div>
+  <button class="icon-btn" id="listen-btn" title="实时收听摄像头声音">🔊 监听</button>
   <button class="icon-btn" id="open-settings">⚙ 设置</button>
 </header>
 <div id="engine-banner" class="banner">当前识别引擎未配置密钥，语音不会被识别。点击右上角「设置」配置。</div>
@@ -436,6 +438,7 @@ const vadStats = document.getElementById('vad-stats');
 const drawer = document.getElementById('drawer');
 const drawerMask = document.getElementById('drawer-mask');
 const toastEl = document.getElementById('toast');
+const listenBtn = document.getElementById('listen-btn');
 
 const ENGINE_LABELS = { aliyun: '阿里云', tencent: '腾讯云', openai: 'OpenAI 兼容' };
 const SECRET_FIELDS = ['dashscope_api_key', 'tencent_secret_id', 'tencent_secret_key', 'openai_api_key'];
@@ -443,6 +446,55 @@ const SECRET_FIELDS = ['dashscope_api_key', 'tencent_secret_id', 'tencent_secret
 let ws = null;
 let searchTimer = null;
 let currentEngine = 'aliyun';
+
+/* 实时监听 */
+let listenWanted = false;
+let audioCtx = null;
+let playHead = 0;
+
+function initAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  playHead = 0;
+}
+
+function playPcm(buffer) {
+  if (!audioCtx) return;
+  const int16 = new Int16Array(buffer);
+  if (!int16.length) return;
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  const audioBuffer = audioCtx.createBuffer(1, int16.length, 16000);
+  audioBuffer.copyToChannel(float32, 0);
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(audioCtx.destination);
+
+  const now = audioCtx.currentTime;
+  // 播放落后或超前太多时重新对齐，避免延迟累积
+  if (playHead < now || playHead > now + 1) playHead = now + 0.08;
+  src.start(playHead);
+  playHead += audioBuffer.duration;
+}
+
+function sendListenState() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'listen', on: listenWanted }));
+  }
+}
+
+function toggleListen() {
+  listenWanted = !listenWanted;
+  if (listenWanted) initAudio();
+  listenBtn.classList.toggle('active', listenWanted);
+  listenBtn.textContent = listenWanted ? '🔇 停止监听' : '🔊 监听';
+  sendListenState();
+}
 
 function setStatus(connected) {
   statusEl.textContent = connected ? '已连接' : '未连接';
@@ -459,10 +511,23 @@ function showToast(msg, isError = false) {
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onopen = () => setStatus(true);
-  ws.onclose = () => { setStatus(false); setTimeout(connectWS, 3000); };
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    setStatus(true);
+    sendListenState();
+  };
+  ws.onclose = () => {
+    setStatus(false);
+    if (listenWanted) showToast('连接断开，重连后继续监听', true);
+    setTimeout(connectWS, 3000);
+  };
   ws.onerror = () => setStatus(false);
   ws.onmessage = (e) => {
+    // 二进制帧是实时音频
+    if (typeof e.data !== 'string') {
+      playPcm(e.data);
+      return;
+    }
     const msg = JSON.parse(e.data);
     if (msg.type === 'transcript') {
       addLiveItem(msg);
@@ -630,6 +695,7 @@ function closeDrawer() {
 }
 
 document.getElementById('open-settings').addEventListener('click', openDrawer);
+listenBtn.addEventListener('click', toggleListen);
 document.getElementById('close-settings').addEventListener('click', closeDrawer);
 document.getElementById('cancel-settings').addEventListener('click', closeDrawer);
 drawerMask.addEventListener('click', closeDrawer);

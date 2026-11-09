@@ -1,5 +1,6 @@
 """FastAPI 应用入口。"""
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -23,6 +24,9 @@ logger = logging.getLogger("stt")
 
 # 活跃的 WebSocket 连接
 _active_clients: List[WebSocket] = []
+
+# 正在实时监听音频的客户端
+_listeners: List[WebSocket] = []
 
 # 拉流任务引用
 _streamer: AudioStreamer | None = None
@@ -92,6 +96,20 @@ async def on_vad_state(state: dict):
     await _broadcast(state)
 
 
+async def on_audio_frame(frame: bytes):
+    """把实时 PCM 帧推给正在监听的客户端。"""
+    if not _listeners:
+        return
+    sends = []
+    for ws in list(_listeners):
+        try:
+            sends.append(asyncio.wait_for(ws.send_bytes(frame), timeout=0.5))
+        except Exception:
+            pass
+    if sends:
+        await asyncio.gather(*sends, return_exceptions=True)
+
+
 def _on_config_change(changed: List[str]):
     """配置热更新回调。"""
     if "rtsp_url" in changed and _streamer is not None:
@@ -112,6 +130,7 @@ async def lifespan(app: FastAPI):
         on_speech_segment=on_speech_segment,
         cfg=cfg,
         on_vad_state=on_vad_state,
+        on_audio_frame=on_audio_frame,
     )
     _stream_task = asyncio.create_task(_streamer.start())
     logger.info(
@@ -199,13 +218,32 @@ async def websocket_endpoint(ws: WebSocket):
     logger.info("WebSocket 客户端连接，当前 %d 个", len(_active_clients))
     try:
         while True:
-            await ws.receive_text()
+            raw = await ws.receive_text()
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            if msg.get("type") == "listen":
+                if msg.get("on"):
+                    if ws not in _listeners:
+                        _listeners.append(ws)
+                    logger.info("客户端开启实时监听，监听数 %d", len(_listeners))
+                else:
+                    if ws in _listeners:
+                        _listeners.remove(ws)
+                    logger.info("客户端关闭实时监听，监听数 %d", len(_listeners))
     except WebSocketDisconnect:
         pass
     finally:
         if ws in _active_clients:
             _active_clients.remove(ws)
-        logger.info("WebSocket 客户端断开，剩余 %d 个", len(_active_clients))
+        if ws in _listeners:
+            _listeners.remove(ws)
+        logger.info(
+            "WebSocket 客户端断开，剩余 %d 个，监听 %d 个",
+            len(_active_clients),
+            len(_listeners),
+        )
 
 
 if __name__ == "__main__":
