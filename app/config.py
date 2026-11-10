@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     # OpenAI 兼容接口单次识别超时（秒）
     asr_timeout: int = 45
 
+    # 语音段在识别队列里允许等待的最长秒数。ASR 服务跟不上时，排队过久的
+    # 片段直接丢弃：几十秒后才转写出来的文字没有实时意义，却会持续占住
+    # 串行 worker，让积压越滚越大。0 = 不限制。Web 设置页可热更新。
+    asr_max_queue_age: int = 10
+
     # 采样率（固定 16kHz，ASR 要求）
     sample_rate: int = 16000
 

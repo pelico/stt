@@ -34,6 +34,7 @@ FIELD_TYPES: Dict[str, type] = {
     "vad_rms_dbfs": int,
     "ffmpeg_highpass": int,
     "ffmpeg_timeout": int,
+    "asr_max_queue_age": int,
     "filter_noise_text": bool,
     "filter_ignore_words": str,
     "save_rejected_audio": bool,
@@ -73,6 +74,7 @@ DEFAULTS: Dict[str, Any] = {
     "vad_rms_dbfs": settings.vad_rms_dbfs,
     "ffmpeg_highpass": settings.ffmpeg_highpass,
     "ffmpeg_timeout": settings.ffmpeg_timeout,
+    "asr_max_queue_age": settings.asr_max_queue_age,
     "filter_noise_text": settings.filter_noise_text,
     "filter_ignore_words": settings.filter_ignore_words,
     "save_rejected_audio": settings.save_rejected_audio,
@@ -179,6 +181,8 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("ffmpeg_highpass 必须在 0 ~ 8000")
     if key == "ffmpeg_timeout" and not (5 <= value <= 120):
         raise ValueError("ffmpeg_timeout 必须在 5 ~ 120")
+    if key == "asr_max_queue_age" and not (0 <= value <= 300):
+        raise ValueError("asr_max_queue_age 必须在 0 ~ 300（0 = 不限制）")
     if key == "filter_ignore_words" and len(str(value)) > 2000:
         raise ValueError("filter_ignore_words 过长")
     if key == "asr_engine" and value not in ENGINES:

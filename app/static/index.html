@@ -585,6 +585,11 @@
         <input type="range" id="ffmpeg_timeout" min="5" max="60" step="5" />
         <div class="hint">网络 I/O 超时，同时作为「无音频数据」看门狗：超过该秒数没数据就断开重连，避免摄像头半开时静默卡死。拉不到流会按 5→10→20→40→60 秒退避。</div>
       </div>
+      <div class="field">
+        <label>队列最长等待 <span class="value-tag" id="queue_age_val">10 s</span></label>
+        <input type="range" id="asr_max_queue_age" min="0" max="120" step="5" />
+        <div class="hint">语音段排队超过该秒数直接丢弃，不补识别几十秒前的话。识别服务跟不上时日志会提示「识别服务跟不上」，并给出当前积压数。设为 0 = 不限制（慢服务下会持续积压）。</div>
+      </div>
       <label class="check-row">
         <input type="checkbox" id="save_rejected_audio" />
         保存被过滤的音频片段
@@ -871,6 +876,7 @@ function syncVadLabels() {
   document.getElementById('preroll_val').textContent = document.getElementById('vad_preroll_ms').value + ' ms';
   document.getElementById('tailpad_val').textContent = document.getElementById('vad_tail_pad_ms').value + ' ms';
   document.getElementById('timeout_val').textContent = document.getElementById('ffmpeg_timeout').value + ' s';
+  document.getElementById('queue_age_val').textContent = document.getElementById('asr_max_queue_age').value + ' s';
 }
 
 async function loadRtspHistory() {
@@ -940,6 +946,7 @@ async function loadSettings() {
   document.getElementById('vad_preroll_ms').value = v.vad_preroll_ms ?? 200;
   document.getElementById('vad_tail_pad_ms').value = v.vad_tail_pad_ms ?? 150;
   document.getElementById('ffmpeg_timeout').value = v.ffmpeg_timeout ?? 20;
+  document.getElementById('asr_max_queue_age').value = v.asr_max_queue_age ?? 10;
   document.getElementById('save_rejected_audio').checked = !!v.save_rejected_audio;
   document.getElementById('filter_noise_text').checked = v.filter_noise_text ?? true;
   document.getElementById('filter_ignore_words').value = v.filter_ignore_words ?? '';
@@ -972,6 +979,7 @@ async function saveSettings() {
     vad_preroll_ms: parseInt(document.getElementById('vad_preroll_ms').value, 10),
     vad_tail_pad_ms: parseInt(document.getElementById('vad_tail_pad_ms').value, 10),
     ffmpeg_timeout: parseInt(document.getElementById('ffmpeg_timeout').value, 10),
+    asr_max_queue_age: parseInt(document.getElementById('asr_max_queue_age').value, 10),
     save_rejected_audio: document.getElementById('save_rejected_audio').checked,
     filter_noise_text: document.getElementById('filter_noise_text').checked,
     filter_ignore_words: document.getElementById('filter_ignore_words').value.trim(),
@@ -1109,7 +1117,7 @@ document.getElementById('cancel-settings').addEventListener('click', closeDrawer
 drawerMask.addEventListener('click', closeDrawer);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 document.getElementById('asr_engine').addEventListener('change', (e) => applyEnginePanels(e.target.value));
-['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio', 'vad_preroll_ms', 'vad_tail_pad_ms', 'ffmpeg_timeout'].forEach(id => {
+['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio', 'vad_preroll_ms', 'vad_tail_pad_ms', 'ffmpeg_timeout', 'asr_max_queue_age'].forEach(id => {
   document.getElementById(id).addEventListener('input', syncVadLabels);
 });
 document.addEventListener('keydown', (e) => {

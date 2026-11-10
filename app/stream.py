@@ -7,6 +7,7 @@ import asyncio
 import logging
 import math
 import re
+import time
 from array import array
 from typing import Callable, Optional
 
@@ -71,7 +72,8 @@ class AudioStreamer:
         self._vad: Optional[webrtcvad.Vad] = None
         self._vad_mode: Optional[int] = None
 
-        # 识别任务队列：避免识别阻塞音频读取
+        # 识别任务队列：避免识别阻塞音频读取。元素为 (入队时刻, PCM)，
+        # 入队时刻用于丢弃排队过久的片段（ASR 跟不上时不补识别历史语音）。
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=20)
         self._worker: Optional[asyncio.Task] = None
 
@@ -80,6 +82,8 @@ class AudioStreamer:
         self._dropped = 0
         self._last_duration_ms = 0
         self._fail_streak = 0
+        self._stale_dropped = 0
+        self._last_stale_log = 0.0
 
     def _get_vad(self) -> webrtcvad.Vad:
         mode = self.cfg.get("vad_mode", 3)
@@ -97,6 +101,8 @@ class AudioStreamer:
             "segments": self._segments,
             "dropped": self._dropped,
             "last_duration_ms": self._last_duration_ms,
+            "queued": self._queue.qsize(),
+            "stale": self._stale_dropped,
         }
 
     @property
@@ -125,10 +131,36 @@ class AudioStreamer:
             self._worker = None
 
     async def _consume(self):
-        """后台串行识别，不阻塞音频读取。"""
+        """后台串行识别，不阻塞音频读取。
+
+        队列项带入队时刻：识别服务慢时，排队超过阈值的片段直接丢弃。
+        否则单 worker 会把几十秒前的语音一段段慢慢补识别，队列越堆越深，
+        前端拿到的全是过期文字，且每段都要白等一次超时。
+        """
         while True:
-            segment = await self._queue.get()
+            created_at, segment = await self._queue.get()
             try:
+                try:
+                    max_age = int(
+                        self.cfg.get(
+                            "asr_max_queue_age", settings.asr_max_queue_age
+                        )
+                    )
+                except (TypeError, ValueError):
+                    max_age = settings.asr_max_queue_age
+                age = time.monotonic() - created_at
+                if max_age > 0 and age > max_age:
+                    self._stale_dropped += 1
+                    now = time.monotonic()
+                    if now - self._last_stale_log >= 10:
+                        self._last_stale_log = now
+                        logger.warning(
+                            "识别服务跟不上：丢弃 %.0f 秒前的语音段（累计 %d 段，"
+                            "队列仍有 %d 段）。请检查 ASR 服务端耗时，"
+                            "或调大「队列最长等待」",
+                            age, self._stale_dropped, self._queue.qsize(),
+                        )
+                    continue
                 await self.on_speech_segment(segment)
             except asyncio.CancelledError:
                 raise
@@ -146,7 +178,7 @@ class AudioStreamer:
                 logger.warning("识别队列已满，丢弃最旧的一段")
             except asyncio.QueueEmpty:
                 pass
-        self._queue.put_nowait(segment)
+        self._queue.put_nowait((time.monotonic(), segment))
 
     async def _notify_stream_state(self, paused: bool):
         if self.on_stream_state is None:
