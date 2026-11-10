@@ -19,6 +19,12 @@
 - **RTSP 地址历史**：自动记录最近 10 个地址，设置页下拉切换，可单独删除
 - 识别异步队列，慢接口不会阻塞音频采集
 - 多架构 Docker 镜像（linux/amd64、linux/arm/v7）
+- **抗断流**：关掉 ffmpeg 进度输出、网络 I/O 超时 + 无数据看门狗、失败按 5→10→20→40→60 秒退避重连，摄像头 TCP 半开不会静默卡死
+- **识别服务熔断**：连续失败 3 次自动退避探活，云端模型重载期间不再把识别队列占满
+- **句首补帧 / 句尾裁静音**：补 200ms 前置音频避免 VAD 滞后吞字头，裁掉多余静音尾减少幻觉文本和推理耗时
+- **广播解耦**：每个 WebSocket 独立发送队列，慢客户端不会拖住音频采集与 VAD
+- **被过滤音频留证**（可选）：把 VAD / 文本层丢弃的片段存成 WAV 回听，判断是噪声还是误杀
+- **可选访问口令**：保护设置接口、历史地址与实时音频流
 
 ## 快速开始
 
@@ -60,9 +66,13 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # 识别时段与日志时间戳按容器本地时间，不设会用 UTC（差 8 小时）
+      - TZ=Asia/Shanghai
       - RTSP_URL=rtsp://192.168.1.100:8554/live
       - ASR_ENGINE=aliyun
       - DASHSCOPE_API_KEY=sk-你的key
+      # 可选访问口令
+      # - ACCESS_TOKEN=change-me
     volumes:
       - ./data:/data
 ```
@@ -88,14 +98,26 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容接口地址 |
 | `OPENAI_API_KEY` | 空 | OpenAI 兼容接口 Key |
 | `OPENAI_MODEL` | `whisper-1` | 转写模型 |
+| `ASR_TIMEOUT` | `45` | OpenAI 兼容接口单次识别超时（秒） |
+| `TZ` | `UTC` | **容器时区**，务必设成 `Asia/Shanghai`，否则识别时段与日志时间差 8 小时 |
 | `VAD_MODE` | `3` | 灵敏度 0-3，越大越严格 |
 | `VAD_FRAME_MS` | `30` | 分析帧长 10/20/30 |
-| `VAD_SILENCE_FRAMES` | `10` | 静音多少帧判定一句结束 |
-| `VAD_MIN_SPEECH_FRAMES` | `3` | 有效语音最少帧数 |
+| `VAD_SILENCE_FRAMES` | `20` | 静音多少帧判定一句结束（20×30ms = 600ms） |
+| `VAD_MIN_SPEECH_FRAMES` | `10` | 有效语音最少帧数（10×30ms = 300ms） |
+| `VAD_MIN_SPEECH_RATIO` | `0.5` | 一段里真语音帧的最低占比，0 关闭 |
+| `VAD_PREROLL_MS` | `200` | 句首补帧，避免 VAD 滞后吞掉字头 |
+| `VAD_TAIL_PAD_MS` | `150` | 句尾保留静音，裁掉多余静音尾 |
 | `VAD_RMS_DBFS` | `-45` | 能量门限（dBFS），低于该音量不算语音 |
+| `FFMPEG_HIGHPASS` | `100` | 高通滤波截止频率（Hz），滤风声/风扇；0 关闭 |
+| `FFMPEG_TIMEOUT` | `20` | 拉流超时（秒），同时作网络 I/O 超时和无数据看门狗 |
+| `FILTER_NOISE_TEXT` | `true` | 丢弃语气词、单字、幻觉短词 |
+| `FILTER_IGNORE_WORDS` | 内置列表 | 噪音词黑名单（逗号分隔） |
+| `SAVE_REJECTED_AUDIO` | `false` | 把被过滤片段存成 WAV 供回听（调试用） |
+| `REJECTED_AUDIO_MAX` | `50` | 留证文件最多保留个数 |
+| `ACCESS_TOKEN` | 空 | 访问口令，空=不启用 |
 | `ASR_ENABLED` | `true` | 识别总开关 |
 | `ASR_SCHEDULE_ENABLED` | `false` | 是否只在指定时段识别 |
-| `ASR_START_TIME` | `08:00` | 识别时段开始（容器本地时间） |
+| `ASR_START_TIME` | `08:00` | 识别时段开始（容器本地时间，见 `TZ`） |
 | `ASR_END_TIME` | `22:00` | 识别时段结束，支持跨午夜 |
 | `HTTP_PORT` | `8000` | 服务端口 |
 | `DB_PATH` | `/data/asr.db` | 数据库路径 |
@@ -107,10 +129,11 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 页面顶部有实时 VAD 状态条：音量电平、当前是否判定为语音、切段/丢弃统计。调参时对照观察最直观。
 
 - 环境安静、说话小声：`VAD_MODE` 调低到 1，能量门限降到 `-55` 左右
-- 环境嘈杂、误触发多：`VAD_MODE` 用 3，能量门限升到 `-35` 左右，`VAD_MIN_SPEECH_FRAMES` 调到 5-8
-- 一句话被切得太碎：调大 `VAD_SILENCE_FRAMES`（例如 20 → 600ms）
-- 出字太慢、想要快速断句：调小 `VAD_SILENCE_FRAMES`（例如 6 → 180ms）
-- 「丢弃」计数一直涨：说明切出来的段太短，调小 `VAD_MIN_SPEECH_FRAMES` 或降低能量门限
+- 环境嘈杂、误触发多：`VAD_MODE` 用 3，能量门限升到 `-35` 左右，`VAD_MIN_SPEECH_FRAMES` 调到 15-20，`VAD_MIN_SPEECH_RATIO` 提到 0.6
+- 一句话被切得太碎：调大 `VAD_SILENCE_FRAMES`（例如 30 → 900ms）
+- 出字太慢、想要快速断句：调小 `VAD_SILENCE_FRAMES`（例如 10 → 300ms），代价是长句容易被切碎
+- 「丢弃」计数一直涨：调小 `VAD_MIN_SPEECH_FRAMES` 或降低能量门限；**拿不准是噪声还是误杀时，打开设置页「保存被过滤的音频片段」，回听 `./data/audio/rejected/` 里的 WAV 再调**
+- 字头被吞：调大「句首补帧」；句尾总带奇怪的语气词：调小「句尾静音」
 
 ## 架构
 
@@ -126,6 +149,26 @@ FFmpeg 抽音频 → PCM(16kHz/单声道) → webrtcvad 静音检测
     ▼
 FastAPI → SQLite（历史）+ WebSocket → 浏览器
 ```
+
+## 稳定性设计（都是踩过的坑）
+
+| 隐患 | 处理 |
+|---|---|
+| ffmpeg 的 `-stats` 进度用 `\r` 刷行，`readline()` 会累积到 64KB 抛异常，之后 stderr 管道写满 → ffmpeg 阻塞 → 拉流静默冻死，而 health 仍显示运行中 | 命令加 `-hide_banner -nostats -loglevel warning`；stderr 改按块读取并自行按 `\r`/`\n` 切分，兜底捕获所有异常 |
+| RTSP TCP 半开（摄像头断电/换 IP）时 `read()` 永不返回 | `-rw_timeout` + 应用层「N 秒无音频数据即断开」，按 5→10→20→40→60 秒指数退避重连 |
+| 云端模型重载要几分钟，每段都等一次超时会把串行识别队列占满 | 连续失败 3 次熔断退避（5→10→…→60 秒），恢复后自动清零，页面弹提示 |
+| 某个浏览器卡住会拖慢音频采集，导致丢帧和 VAD 时间轴漂移 | 每个 WebSocket 独立有界队列 + 发送任务；采集循环只做非阻塞投递 |
+| 600ms 静音尾整段送进 ASR 容易「编」出嗯/啊/英文单词 | 切段裁到 150ms 静音尾，并补 200ms 句首音频 |
+
+## 访问口令（可选）
+
+设置 `ACCESS_TOKEN` 后，`/api/*` 与 `/ws` 都需要口令，避免同网段的人读到含账密的 RTSP 地址、改引擎把音频转走。
+
+1. compose 里加 `- ACCESS_TOKEN=your-secret`，重启容器
+2. 首次用 `http://<设备IP>:8000/?token=your-secret` 打开页面，口令会存进浏览器 localStorage
+3. 之后所有请求与 WebSocket 自动带口令，直接访问正常地址即可
+
+**不设置该变量时行为与旧版完全一致**，不会影响现有部署。注意这只是一道轻量访问控制，若要公网暴露请再加反向代理的 HTTPS 与认证。
 
 ## 自行构建
 

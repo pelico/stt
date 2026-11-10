@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 from app.config import settings
@@ -42,10 +42,8 @@ class Transcript(Base):
         }
 
 
-# 确保数据目录存在
-os.makedirs(os.path.dirname(settings.db_path), exist_ok=True)
-if settings.save_audio:
-    os.makedirs(settings.audio_dir, exist_ok=True)
+# 确保数据库目录存在（音频目录由 audio_dump 按需创建）
+os.makedirs(os.path.dirname(settings.db_path) or ".", exist_ok=True)
 
 engine = create_engine(
     f"sqlite:///{settings.db_path}",
@@ -90,6 +88,26 @@ def save_transcript(
         db.close()
 
 
+def _like_pattern(keyword: str) -> str:
+    """转义 LIKE 通配符，避免用户输入 % / _ 时变成全表匹配。"""
+    escaped = (
+        keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    return f"%{escaped}%"
+
+
+def count_transcripts(keyword: Optional[str] = None) -> int:
+    """匹配的总条数（不受分页影响）。"""
+    db = SessionLocal()
+    try:
+        query = db.query(func.count(Transcript.id))
+        if keyword:
+            query = query.filter(Transcript.text.like(_like_pattern(keyword), escape="\\"))
+        return int(query.scalar() or 0)
+    finally:
+        db.close()
+
+
 def list_transcripts(
     limit: int = 100,
     offset: int = 0,
@@ -100,7 +118,7 @@ def list_transcripts(
     try:
         query = db.query(Transcript)
         if keyword:
-            query = query.filter(Transcript.text.like(f"%{keyword}%"))
+            query = query.filter(Transcript.text.like(_like_pattern(keyword), escape="\\"))
         return (
             query.order_by(Transcript.timestamp.desc())
             .offset(offset)

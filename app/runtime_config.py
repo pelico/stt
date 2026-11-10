@@ -29,10 +29,14 @@ FIELD_TYPES: Dict[str, type] = {
     "vad_silence_frames": int,
     "vad_min_speech_frames": int,
     "vad_min_speech_ratio": float,
+    "vad_preroll_ms": int,
+    "vad_tail_pad_ms": int,
     "vad_rms_dbfs": int,
     "ffmpeg_highpass": int,
+    "ffmpeg_timeout": int,
     "filter_noise_text": bool,
     "filter_ignore_words": str,
+    "save_rejected_audio": bool,
     "asr_enabled": bool,
     "asr_schedule_enabled": bool,
     "asr_start_time": str,
@@ -64,10 +68,14 @@ DEFAULTS: Dict[str, Any] = {
     "vad_silence_frames": settings.vad_silence_frames,
     "vad_min_speech_frames": settings.vad_min_speech_frames,
     "vad_min_speech_ratio": settings.vad_min_speech_ratio,
+    "vad_preroll_ms": settings.vad_preroll_ms,
+    "vad_tail_pad_ms": settings.vad_tail_pad_ms,
     "vad_rms_dbfs": settings.vad_rms_dbfs,
     "ffmpeg_highpass": settings.ffmpeg_highpass,
+    "ffmpeg_timeout": settings.ffmpeg_timeout,
     "filter_noise_text": settings.filter_noise_text,
     "filter_ignore_words": settings.filter_ignore_words,
+    "save_rejected_audio": settings.save_rejected_audio,
     "asr_enabled": settings.asr_enabled,
     "asr_schedule_enabled": settings.asr_schedule_enabled,
     "asr_start_time": settings.asr_start_time,
@@ -163,8 +171,14 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("vad_rms_dbfs 必须在 -80 ~ -10")
     if key == "vad_min_speech_ratio" and not (0 <= value <= 1):
         raise ValueError("vad_min_speech_ratio 必须在 0 ~ 1")
+    if key == "vad_preroll_ms" and not (0 <= value <= 1000):
+        raise ValueError("vad_preroll_ms 必须在 0 ~ 1000")
+    if key == "vad_tail_pad_ms" and not (0 <= value <= 2000):
+        raise ValueError("vad_tail_pad_ms 必须在 0 ~ 2000")
     if key == "ffmpeg_highpass" and not (0 <= value <= 8000):
         raise ValueError("ffmpeg_highpass 必须在 0 ~ 8000")
+    if key == "ffmpeg_timeout" and not (5 <= value <= 120):
+        raise ValueError("ffmpeg_timeout 必须在 5 ~ 120")
     if key == "filter_ignore_words" and len(str(value)) > 2000:
         raise ValueError("filter_ignore_words 过长")
     if key == "asr_engine" and value not in ENGINES:

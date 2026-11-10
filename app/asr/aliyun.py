@@ -56,8 +56,7 @@ class AliyunASR(BaseASR):
 
     async def recognize(self, pcm: bytes) -> str:
         if not self.api_key:
-            logger.error("未配置 DASHSCOPE_API_KEY，跳过识别")
-            return ""
+            raise RuntimeError("未配置 DASHSCOPE_API_KEY")
 
         dashscope.api_key = self.api_key
         callback = _Callback()
@@ -77,9 +76,8 @@ class AliyunASR(BaseASR):
         try:
             rt.start()
             if not callback.opened.wait(timeout=5):
-                logger.error("ASR 连接超时")
                 rt.stop()
-                return ""
+                raise RuntimeError("ASR 连接超时")
 
             chunk_size = self.sample_rate // 10 * 2  # 100ms
             for i in range(0, len(pcm), chunk_size):
@@ -89,9 +87,10 @@ class AliyunASR(BaseASR):
             if not callback.done.wait(timeout=30):
                 logger.warning("ASR 识别超时")
             if callback.error:
-                logger.error("ASR 错误: %s", callback.error)
+                raise RuntimeError(f"ASR 错误: {callback.error}")
 
             return callback.text.strip()
         except Exception as e:
+            # 上抛给 main.py 统一做连续失败计数与熔断退避
             logger.error("ASR 会话异常: %s", e)
-            return ""
+            raise

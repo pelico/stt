@@ -8,6 +8,7 @@ import logging
 import requests
 
 from app.asr.base import BaseASR, pcm_to_wav
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class OpenAISR(BaseASR):
         self.api_key = cfg.get("openai_api_key")
         self.model = cfg.get("openai_model") or "whisper-1"
         self.language = cfg.get("asr_language") or "auto"
+        self.timeout = max(5, int(settings.asr_timeout))
 
     def _transcribe_sync(self, pcm: bytes) -> str:
         wav = pcm_to_wav(pcm)
@@ -31,7 +33,7 @@ class OpenAISR(BaseASR):
             headers={"Authorization": f"Bearer {self.api_key}"},
             files={"file": ("audio.wav", wav, "audio/wav")},
             data=data,
-            timeout=60,
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         try:
@@ -42,10 +44,7 @@ class OpenAISR(BaseASR):
 
     async def recognize(self, pcm: bytes) -> str:
         if not self.base_url or not self.api_key:
-            logger.error("未配置 OpenAI 兼容接口地址或 Key，跳过识别")
-            return ""
-        try:
-            return await asyncio.to_thread(self._transcribe_sync, pcm)
-        except Exception as e:
-            logger.error("OpenAI ASR 请求失败: %s", e)
-            return ""
+            raise RuntimeError("未配置 OpenAI 兼容接口地址或 Key")
+        # 异常向上抛给 main.py，由它统一做连续失败计数与熔断退避。
+        # 这里吞掉异常会让模型重载期间的每一段都白等一个超时。
+        return await asyncio.to_thread(self._transcribe_sync, pcm)

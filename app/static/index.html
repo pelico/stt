@@ -551,6 +551,16 @@
         <input type="range" id="vad_min_speech_ratio" min="0" max="100" step="5" />
         <div class="hint">一段音频里"真语音帧"的最低占比。噪声往往只有零星几帧被判为语音，调到 50% 以上能明显减少空识别；设 0 关闭此项。</div>
       </div>
+      <div class="field">
+        <label>句首补帧 <span class="value-tag" id="preroll_val">200 ms</span></label>
+        <input type="range" id="vad_preroll_ms" min="0" max="500" step="50" />
+        <div class="hint">开讲前补进片段的音频。VAD 判定有滞后，不补会吞掉字头；设 0 关闭。</div>
+      </div>
+      <div class="field">
+        <label>句尾静音 <span class="value-tag" id="tailpad_val">150 ms</span></label>
+        <input type="range" id="vad_tail_pad_ms" min="0" max="600" step="50" />
+        <div class="hint">切段时保留多少静音尾。整段 600ms 静音送进模型容易产生幻觉文本，裁短更干净也更快。</div>
+      </div>
       <div class="hint">这些参数保存后立即生效，无需重启容器。</div>
     </div>
 
@@ -566,6 +576,20 @@
         <div class="hint">识别结果（忽略标点、不分大小写）完全等于其中任一词时丢弃。已内置常见语气词与幻觉词，这里补现场特有的杂音词即可。</div>
       </div>
       <div class="hint">模型对纯噪声会"编"出文字（嗯、啊、四、Here.）。此开关只影响入库与推送，不影响拉流；关闭后记录全部原始结果。</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">拉流与调试</div>
+      <div class="field">
+        <label>拉流超时 <span class="value-tag" id="timeout_val">20 s</span></label>
+        <input type="range" id="ffmpeg_timeout" min="5" max="60" step="5" />
+        <div class="hint">网络 I/O 超时，同时作为「无音频数据」看门狗：超过该秒数没数据就断开重连，避免摄像头半开时静默卡死。拉不到流会按 5→10→20→40→60 秒退避。</div>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="save_rejected_audio" />
+        保存被过滤的音频片段
+      </label>
+      <div class="hint">开启后，被 VAD 或文本层丢弃的片段存到 ./data/audio/rejected/（WAV，最多保留 50 个）。回听可判断是噪声还是误杀，调完参数建议关掉。</div>
     </div>
   </div>
   <div class="drawer-foot">
@@ -597,6 +621,20 @@ const logPauseBtn = document.getElementById('log-pause');
 
 const ENGINE_LABELS = { aliyun: '阿里云', tencent: '腾讯云', openai: 'OpenAI 兼容' };
 const SECRET_FIELDS = ['dashscope_api_key', 'tencent_secret_id', 'tencent_secret_key', 'openai_api_key'];
+
+/* 可选访问口令：首次用 ?token=xxx 打开页面即记住，后续请求与 WS 自动带上 */
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) localStorage.setItem('stt_token', urlToken);
+function apiFetch(url, opts = {}) {
+  const token = localStorage.getItem('stt_token') || '';
+  const headers = new Headers(opts.headers || {});
+  if (token) headers.set('X-Access-Token', token);
+  return fetch(url, { ...opts, headers });
+}
+function wsToken() {
+  const token = localStorage.getItem('stt_token') || '';
+  return token ? `?token=${encodeURIComponent(token)}` : '';
+}
 
 let ws = null;
 let searchTimer = null;
@@ -665,7 +703,7 @@ function showToast(msg, isError = false) {
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws = new WebSocket(`${proto}//${location.host}/ws${wsToken()}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {
     setStatus(true);
@@ -691,6 +729,8 @@ function connectWS() {
       updateVad(msg);
     } else if (msg.type === 'stream') {
       updateStreamState(msg.paused);
+    } else if (msg.type === 'asr_state') {
+      showToast(msg.blocked ? `识别服务不可用，${msg.retry_in} 秒后自动重试` : '识别服务已恢复', !!msg.blocked);
     }
   };
 }
@@ -754,7 +794,7 @@ function prependHistoryItem(msg) {
 
 async function loadHistory(keyword = '') {
   try {
-    const res = await fetch(`/api/transcripts?limit=100&keyword=${encodeURIComponent(keyword)}`);
+    const res = await apiFetch(`/api/transcripts?limit=100&keyword=${encodeURIComponent(keyword)}`);
     const data = await res.json();
     historyList.innerHTML = '';
     if (!data.items.length) {
@@ -796,7 +836,7 @@ function renderAsrState(data) {
 async function toggleAsr() {
   const next = asrToggle.dataset.enabled !== '1';
   try {
-    const res = await fetch('/api/settings', {
+    const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asr_enabled: next }),
@@ -828,12 +868,15 @@ function syncVadLabels() {
   document.getElementById('silence_ms_val').textContent = (silenceFrames * frameMs) + ' ms';
   document.getElementById('min_speech_ms_val').textContent = (minSpeech * frameMs) + ' ms';
   document.getElementById('ratio_val').textContent = document.getElementById('vad_min_speech_ratio').value + ' %';
+  document.getElementById('preroll_val').textContent = document.getElementById('vad_preroll_ms').value + ' ms';
+  document.getElementById('tailpad_val').textContent = document.getElementById('vad_tail_pad_ms').value + ' ms';
+  document.getElementById('timeout_val').textContent = document.getElementById('ffmpeg_timeout').value + ' s';
 }
 
 async function loadRtspHistory() {
   const sel = document.getElementById('rtsp-history-select');
   try {
-    const res = await fetch('/api/rtsp-history');
+    const res = await apiFetch('/api/rtsp-history');
     const data = await res.json();
     sel.innerHTML = '<option value="">从历史地址选择…</option>';
     (data.items || []).forEach((url) => {
@@ -856,7 +899,7 @@ async function deleteRtspHistory() {
   }
   if (!confirm(`确定删除这条历史地址？\n\n${sel.value}`)) return;
   try {
-    await fetch(`/api/rtsp-history?url=${encodeURIComponent(sel.value)}`, { method: 'DELETE' });
+    await apiFetch(`/api/rtsp-history?url=${encodeURIComponent(sel.value)}`, { method: 'DELETE' });
     await loadRtspHistory();
     showToast('已删除历史地址');
   } catch (e) {
@@ -865,7 +908,7 @@ async function deleteRtspHistory() {
 }
 
 async function loadSettings() {
-  const res = await fetch('/api/settings');
+  const res = await apiFetch('/api/settings');
   const data = await res.json();
   const v = data.values;
 
@@ -894,6 +937,10 @@ async function loadSettings() {
   document.getElementById('vad_silence_frames').value = v.vad_silence_frames;
   document.getElementById('vad_min_speech_frames').value = v.vad_min_speech_frames;
   document.getElementById('vad_min_speech_ratio').value = Math.round((v.vad_min_speech_ratio ?? 0.5) * 100);
+  document.getElementById('vad_preroll_ms').value = v.vad_preroll_ms ?? 200;
+  document.getElementById('vad_tail_pad_ms').value = v.vad_tail_pad_ms ?? 150;
+  document.getElementById('ffmpeg_timeout').value = v.ffmpeg_timeout ?? 20;
+  document.getElementById('save_rejected_audio').checked = !!v.save_rejected_audio;
   document.getElementById('filter_noise_text').checked = v.filter_noise_text ?? true;
   document.getElementById('filter_ignore_words').value = v.filter_ignore_words ?? '';
   syncVadLabels();
@@ -922,6 +969,10 @@ async function saveSettings() {
     vad_silence_frames: parseInt(document.getElementById('vad_silence_frames').value, 10),
     vad_min_speech_frames: parseInt(document.getElementById('vad_min_speech_frames').value, 10),
     vad_min_speech_ratio: parseInt(document.getElementById('vad_min_speech_ratio').value, 10) / 100,
+    vad_preroll_ms: parseInt(document.getElementById('vad_preroll_ms').value, 10),
+    vad_tail_pad_ms: parseInt(document.getElementById('vad_tail_pad_ms').value, 10),
+    ffmpeg_timeout: parseInt(document.getElementById('ffmpeg_timeout').value, 10),
+    save_rejected_audio: document.getElementById('save_rejected_audio').checked,
     filter_noise_text: document.getElementById('filter_noise_text').checked,
     filter_ignore_words: document.getElementById('filter_ignore_words').value.trim(),
     asr_schedule_enabled: document.getElementById('asr_schedule_enabled').checked,
@@ -934,7 +985,7 @@ async function saveSettings() {
   });
 
   try {
-    const res = await fetch('/api/settings', {
+    const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -974,7 +1025,7 @@ function appendLogLine(item) {
 async function fetchLogs() {
   if (logPaused) return;
   try {
-    const res = await fetch(`/api/logs?after=${logLastId}&limit=500`);
+    const res = await apiFetch(`/api/logs?after=${logLastId}&limit=500`);
     const data = await res.json();
     if (!data.items.length) return;
     const empty = logBody.querySelector('.empty');
@@ -1014,7 +1065,7 @@ function closeLogs() {
 
 async function clearLogs() {
   try {
-    const res = await fetch('/api/logs', { method: 'DELETE' });
+    const res = await apiFetch('/api/logs', { method: 'DELETE' });
     const data = await res.json();
     logLastId = data.last_id;
     logBody.innerHTML = '<div class="empty">暂无日志</div>';
@@ -1058,7 +1109,7 @@ document.getElementById('cancel-settings').addEventListener('click', closeDrawer
 drawerMask.addEventListener('click', closeDrawer);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 document.getElementById('asr_engine').addEventListener('change', (e) => applyEnginePanels(e.target.value));
-['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio'].forEach(id => {
+['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio', 'vad_preroll_ms', 'vad_tail_pad_ms', 'ffmpeg_timeout'].forEach(id => {
   document.getElementById(id).addEventListener('input', syncVadLabels);
 });
 document.addEventListener('keydown', (e) => {
@@ -1075,7 +1126,7 @@ loadSettings().catch(() => {});
 // 定时同步识别状态，让时段切换（进入/离开时间段）自动反映到按钮上
 setInterval(async () => {
   try {
-    const res = await fetch('/api/health');
+    const res = await apiFetch('/api/health');
     if (res.ok) renderAsrState(await res.json());
   } catch (e) {
     /* 忽略 */

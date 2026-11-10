@@ -6,10 +6,13 @@ VAD 参数从运行时配置读取，Web 上修改后立即生效。
 import asyncio
 import logging
 import math
+import re
 from array import array
 from typing import Callable, Optional
 
 import webrtcvad
+
+from app.config import settings
 
 try:  # Python <= 3.12 自带；3.13+ 已移除，用纯 Python 兜底
     import audioop
@@ -51,6 +54,7 @@ class AudioStreamer:
         on_audio_frame: Optional[Callable[[bytes], object]] = None,
         should_stream: Optional[Callable[[], bool]] = None,
         on_stream_state: Optional[Callable[[bool], object]] = None,
+        on_rejected_segment: Optional[Callable[[bytes, str], object]] = None,
     ):
         self.cfg = cfg
         self.on_speech_segment = on_speech_segment
@@ -58,6 +62,7 @@ class AudioStreamer:
         self.on_audio_frame = on_audio_frame
         self.should_stream = should_stream
         self.on_stream_state = on_stream_state
+        self.on_rejected_segment = on_rejected_segment
         self.sample_rate = 16000
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._running = False
@@ -74,6 +79,7 @@ class AudioStreamer:
         self._segments = 0
         self._dropped = 0
         self._last_duration_ms = 0
+        self._fail_streak = 0
 
     def _get_vad(self) -> webrtcvad.Vad:
         mode = self.cfg.get("vad_mode", 3)
@@ -174,11 +180,12 @@ class AudioStreamer:
                 await self._pause_stream()
                 continue
             try:
-                await self._run_once()
+                healthy = await self._run_once()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error("拉流异常: %s", e)
+                healthy = False
 
             if not self._running:
                 break
@@ -187,8 +194,18 @@ class AudioStreamer:
             if self.should_stream is not None and not self.should_stream():
                 continue
 
+            # 连续拉不到数据时指数退避，避免摄像头宕机时每 5 秒刷一次错误
+            if healthy:
+                self._fail_streak = 0
+                delay = 5
+            else:
+                self._fail_streak += 1
+                delay = min(60, 5 * (2 ** min(self._fail_streak - 1, 4)))
+                logger.warning(
+                    "拉流连续失败 %d 次，%d 秒后重连", self._fail_streak, delay
+                )
             try:
-                await asyncio.wait_for(self._restart.wait(), timeout=5)
+                await asyncio.wait_for(self._restart.wait(), timeout=delay)
             except asyncio.TimeoutError:
                 pass
             self._restart.clear()
@@ -203,30 +220,55 @@ class AudioStreamer:
         "application provided invalid, non monotonically",
     )
 
+    def _log_ffmpeg_line(self, line: str):
+        line = line.strip()
+        if not line:
+            return
+        low = line.lower()
+        if any(h in low for h in self._FFMPEG_ERROR_HINTS) and not any(
+            h in low for h in self._FFMPEG_IGNORE_HINTS
+        ):
+            logger.warning("ffmpeg: %s", line)
+
     async def _drain_stderr(self, proc):
-        """把 ffmpeg 的关键错误转进应用日志，方便在网页日志页排查拉流问题。"""
+        """把 ffmpeg 的关键错误转进应用日志。
+
+        不能用 readline()：ffmpeg 的 -stats 进度用 \\r 刷同一行、不含 \\n，
+        readline 会一直累积到 StreamReader 的 64KB 上限并抛
+        "Separator is not found, and chunk exceed the limit"，之后若无人再读
+        stderr，管道写满会让 ffmpeg 整体阻塞（拉流静默冻死）。
+        这里按块读取并自行按 \\r / \\n 切分，且兜底所有异常。
+        """
         if proc.stderr is None:
             return
+        pending = ""
         try:
             while True:
-                raw = await proc.stderr.readline()
-                if not raw:
+                chunk = await proc.stderr.read(4096)
+                if not chunk:
                     break
-                line = raw.decode("utf-8", "replace").strip()
-                low = line.lower()
-                if line and any(h in low for h in self._FFMPEG_ERROR_HINTS) and not any(
-                    h in low for h in self._FFMPEG_IGNORE_HINTS
-                ):
-                    logger.warning("ffmpeg: %s", line)
+                pending += chunk.decode("utf-8", "replace")
+                parts = re.split(r"[\r\n]+", pending)
+                pending = parts.pop() or ""
+                for line in parts:
+                    self._log_ffmpeg_line(line)
         except asyncio.CancelledError:
-            pass
+            return
+        except Exception as e:
+            logger.warning("ffmpeg stderr 读取中止: %s", e)
+        self._log_ffmpeg_line(pending)
 
-    async def _run_once(self):
+    async def _run_once(self) -> bool:
+        """跑一次拉流，返回是否成功收到过音频数据（用于重连退避）。"""
         url = self.cfg.get("rtsp_url")
         highpass = int(self.cfg.get("ffmpeg_highpass", 100))
+        timeout_sec = max(5, int(self.cfg.get("ffmpeg_timeout", 20)))
         cmd = [
-            "ffmpeg",
+            settings.ffmpeg_path,
+            "-hide_banner", "-nostats", "-loglevel", "warning",
             "-rtsp_transport", "tcp",
+            # 网络半开时不要无限等；配合下面的无数据看门狗双保险
+            "-rw_timeout", str(timeout_sec * 1_000_000),
             # 部分摄像头 RTP 时间戳不前进/跳变，用墙钟时间戳 + genpts 保证单调，
             # 否则 s16le muxer 每包刷 "non monotonically increasing dts" 告警
             "-use_wallclock_as_timestamps", "1",
@@ -259,6 +301,12 @@ class AudioStreamer:
         silence_count = 0
         speech_frames = 0
         in_speech = False
+        got_data = False
+
+        # 开讲前的滚动缓冲：VAD 判定滞后 1~2 帧，补进句首才不吞字
+        preroll = b""
+        preroll_limit = 0
+        tail_pad_frames = 0
 
         loop = asyncio.get_event_loop()
         last_emit = 0.0
@@ -274,11 +322,28 @@ class AudioStreamer:
             min_speech = int(self.cfg.get("vad_min_speech_frames", 10))
             min_ratio = float(self.cfg.get("vad_min_speech_ratio", 0.5))
             rms_limit = float(self.cfg.get("vad_rms_dbfs", -45))
+            preroll_limit = max(
+                frame_bytes,
+                self.sample_rate * 2 * int(self.cfg.get("vad_preroll_ms", 200)) // 1000,
+            )
+            tail_pad_frames = max(
+                0, int(self.cfg.get("vad_tail_pad_ms", 150)) // max(1, frame_ms)
+            )
 
-            data = await proc.stdout.read(frame_bytes)
+            # RTSP TCP 半开时 read() 可能永不返回，用看门狗强制重连
+            try:
+                data = await asyncio.wait_for(
+                    proc.stdout.read(frame_bytes), timeout=timeout_sec
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "ffmpeg %d 秒无音频数据，判定拉流卡死，准备重连", timeout_sec
+                )
+                break
             if not data:
                 logger.warning("ffmpeg 输出结束")
                 break
+            got_data = True
 
             buffer += data
             while len(buffer) >= frame_bytes:
@@ -297,7 +362,7 @@ class AudioStreamer:
                     if not in_speech:
                         in_speech = True
                         speech_frames = 0
-                        speech_buffer = b""
+                        speech_buffer = preroll[-preroll_limit:]
                     speech_buffer += frame
                     speech_frames += 1
                     silence_count = 0
@@ -309,6 +374,11 @@ class AudioStreamer:
                         len(speech_buffer) > MAX_SEGMENT_SEC * self.sample_rate * 2
                     )
                     if silence_count >= silence_limit or too_long:
+                        # 整段 600ms 静音尾是 ASR 幻觉高发区，裁到只留少量 padding
+                        if silence_count > tail_pad_frames:
+                            trim = (silence_count - tail_pad_frames) * frame_bytes
+                            if 0 < trim < len(speech_buffer):
+                                speech_buffer = speech_buffer[:-trim]
                         duration_ms = int(
                             len(speech_buffer) / (self.sample_rate * 2) * 1000
                         )
@@ -327,10 +397,20 @@ class AudioStreamer:
                                 "丢弃疑似噪声段: %d ms, 语音帧 %d/%d (%.0f%%)",
                                 duration_ms, speech_frames, total_frames, ratio * 100,
                             )
+                            if self.on_rejected_segment is not None:
+                                try:
+                                    await self.on_rejected_segment(speech_buffer, "vad")
+                                except Exception:
+                                    pass
                         in_speech = False
                         speech_buffer = b""
                         silence_count = 0
                         speech_frames = 0
+                        preroll = b""
+
+                # 静音态维护滚动前置缓冲；语音态不更新，避免把句中音频塞进下一段
+                if not in_speech:
+                    preroll = (preroll + frame)[-preroll_limit:]
 
                 # 实时监听：把原始 PCM 帧推给订阅端
                 if self.on_audio_frame is not None:
@@ -370,3 +450,4 @@ class AudioStreamer:
             pass
         if self._proc is proc:
             self._proc = None
+        return got_data

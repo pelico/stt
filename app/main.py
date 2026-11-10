@@ -3,15 +3,19 @@ import asyncio
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
-from typing import List
+from typing import Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.audio_dump import dump_rejected
 from app.config import settings
-from app.database import init_db, save_transcript, list_transcripts, iso_utc
+from app.database import (
+    init_db, save_transcript, list_transcripts, count_transcripts, iso_utc,
+)
 from app.logbuffer import BufferHandler, LogBuffer
 from app.rtsp_history import add_history, list_history, remove_history
 from app.stream import AudioStreamer
@@ -31,15 +35,68 @@ _buffer_handler = BufferHandler(log_buffer)
 _buffer_handler.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
 logging.getLogger().addHandler(_buffer_handler)
 
-# 活跃的 WebSocket 连接
-_active_clients: List[WebSocket] = []
+# 可选访问口令：空表示不启用（兼容原有部署）
+ACCESS_TOKEN = (settings.access_token or "").strip()
 
-# 正在实时监听音频的客户端
-_listeners: List[WebSocket] = []
+
+class WSClient:
+    """每个 WebSocket 一个发送队列 + 独立发送任务。
+
+    音频采集循环只做非阻塞投递，慢/半死的浏览器不会再拖住 VAD；
+    也不再对 send 套 wait_for（超时取消可能写坏半帧，直接破坏协议）。
+    """
+
+    def __init__(self, ws: WebSocket):
+        self.ws = ws
+        self.listening = False
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+        self.sender = asyncio.create_task(self._send_loop())
+
+    async def _send_loop(self):
+        try:
+            while True:
+                item = await self.queue.get()
+                if isinstance(item, bytes):
+                    await self.ws.send_bytes(item)
+                else:
+                    await self.ws.send_json(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 连接断开由 endpoint 的 finally 清理
+            pass
+
+    def offer(self, item) -> bool:
+        """非阻塞投递；队列满时丢最旧的一条，保证实时性优先。"""
+        try:
+            self.queue.put_nowait(item)
+            return True
+        except asyncio.QueueFull:
+            try:
+                self.queue.get_nowait()
+                self.queue.put_nowait(item)
+                return True
+            except Exception:
+                return False
+
+    def close(self):
+        self.sender.cancel()
+
+
+_clients: Dict[WebSocket, WSClient] = {}
 
 # 拉流任务引用
-_streamer: AudioStreamer | None = None
-_stream_task: asyncio.Task | None = None
+_streamer: Optional[AudioStreamer] = None
+_stream_task: Optional[asyncio.Task] = None
+
+# 识别服务熔断：连续失败时退避，避免模型重载期间把串行队列占满
+_asr_failures = 0
+_asr_blocked_until = 0.0
+ASR_FAIL_THRESHOLD = 3
+ASR_BACKOFF_CAP = 60
+
+# 音频留证并发上限，避免大量丢弃片段同时写 SD 卡
+_dump_running = 0
 
 
 def _engine_ready(cfg) -> bool:
@@ -53,17 +110,33 @@ def _engine_ready(cfg) -> bool:
     return False
 
 
-async def _broadcast(message: dict):
-    """向所有前端推送消息，单个客户端卡住不影响音频处理。"""
-    for ws in list(_active_clients):
-        try:
-            await asyncio.wait_for(ws.send_json(message), timeout=1)
-        except Exception:
-            pass
+def _broadcast(message: dict):
+    """向所有前端投递消息（同步、非阻塞）。"""
+    for client in list(_clients.values()):
+        client.offer(message)
+
+
+async def _dump_rejected(pcm: bytes, reason: str):
+    """异步留存被过滤片段；开关默认关闭。"""
+    global _dump_running
+    if not get_runtime().get("save_rejected_audio", False):
+        return
+    if _dump_running >= 3:
+        return
+    _dump_running += 1
+    try:
+        name = await asyncio.to_thread(dump_rejected, pcm, reason)
+        if name:
+            logger.info("已留存被过滤音频: %s（%s）", name, reason)
+    except Exception as e:
+        logger.warning("留存被过滤音频失败: %s", e)
+    finally:
+        _dump_running -= 1
 
 
 async def on_speech_segment(audio_data: bytes):
     """收到一段语音后的处理：识别 -> 存库 -> 推送前端。"""
+    global _asr_failures, _asr_blocked_until
     cfg = get_runtime()
     duration_sec = len(audio_data) / (settings.sample_rate * 2)
     if not asr_active(cfg):
@@ -71,11 +144,33 @@ async def on_speech_segment(audio_data: bytes):
         return
     logger.info("收到语音段: %.1f 秒", duration_sec)
 
+    now = time.monotonic()
+    if now < _asr_blocked_until:
+        logger.debug(
+            "识别服务熔断中，%.0f 秒后重试", _asr_blocked_until - now
+        )
+        return
+
     try:
         text = await get_asr(cfg).recognize(audio_data)
     except Exception as e:
-        logger.error("ASR 识别失败: %s", e)
-        text = ""
+        _asr_failures += 1
+        logger.error("ASR 识别失败（连续 %d 次）: %s", _asr_failures, e)
+        if _asr_failures >= ASR_FAIL_THRESHOLD:
+            backoff = min(
+                ASR_BACKOFF_CAP,
+                5 * (2 ** min(_asr_failures - ASR_FAIL_THRESHOLD, 4)),
+            )
+            _asr_blocked_until = time.monotonic() + backoff
+            logger.warning("识别服务连续失败，熔断 %d 秒后探活", backoff)
+            _broadcast({"type": "asr_state", "blocked": True, "retry_in": backoff})
+        return
+
+    if _asr_failures:
+        _asr_failures = 0
+        _asr_blocked_until = 0.0
+        logger.info("识别服务已恢复")
+        _broadcast({"type": "asr_state", "blocked": False})
 
     if not text:
         logger.debug("识别结果为空，跳过")
@@ -85,12 +180,14 @@ async def on_speech_segment(audio_data: bytes):
         reason = noise_reason(text, cfg.get("filter_ignore_words", ""))
         if reason:
             logger.info("丢弃噪音识别结果 (%s): %s", reason, text)
+            await _dump_rejected(audio_data, f"text-{reason}")
             return
 
     logger.info("识别结果: %s", text)
 
     try:
-        record = save_transcript(
+        record = await asyncio.to_thread(
+            save_transcript,
             text=text,
             duration_sec=int(duration_sec),
             engine=cfg.get("asr_engine"),
@@ -106,31 +203,29 @@ async def on_speech_segment(audio_data: bytes):
         "duration_sec": int(duration_sec),
         "id": record.id if record else None,
     }
-    await _broadcast(message)
+    _broadcast(message)
 
 
 async def on_vad_state(state: dict):
-    """把 VAD 实时状态推给前端，用于调参。"""
-    await _broadcast(state)
+    """把 VAD 实时状态推给前端，用于调参（非阻塞）。"""
+    _broadcast(state)
 
 
 async def on_audio_frame(frame: bytes):
-    """把实时 PCM 帧推给正在监听的客户端。"""
-    if not _listeners:
-        return
-    sends = []
-    for ws in list(_listeners):
-        try:
-            sends.append(asyncio.wait_for(ws.send_bytes(frame), timeout=0.5))
-        except Exception:
-            pass
-    if sends:
-        await asyncio.gather(*sends, return_exceptions=True)
+    """把实时 PCM 帧推给正在播放的客户端（非阻塞）。"""
+    for client in list(_clients.values()):
+        if client.listening:
+            client.offer(frame)
 
 
 async def on_stream_state(paused: bool):
     """时段外挂起/恢复时通知前端。"""
-    await _broadcast({"type": "stream", "paused": paused})
+    _broadcast({"type": "stream", "paused": paused})
+
+
+async def on_rejected_segment(pcm: bytes, reason: str):
+    """VAD 层丢弃的片段，留证用于判断是噪声还是误杀。"""
+    await _dump_rejected(pcm, f"vad-{reason}")
 
 
 def _on_config_change(changed: List[str]):
@@ -156,6 +251,7 @@ async def lifespan(app: FastAPI):
         on_audio_frame=on_audio_frame,
         should_stream=lambda: in_schedule(get_runtime()),
         on_stream_state=on_stream_state,
+        on_rejected_segment=on_rejected_segment,
     )
     # 记录当前地址到历史，方便下次切换
     add_history(cfg.get("rtsp_url"))
@@ -185,6 +281,20 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
+@app.middleware("http")
+async def access_guard(request: Request, call_next):
+    """可选口令保护 /api/*；静态页面公开，便于用 ?token= 注入口令。"""
+    if ACCESS_TOKEN and request.url.path.startswith("/api/"):
+        supplied = (
+            request.headers.get("x-access-token")
+            or request.query_params.get("token")
+            or ""
+        )
+        if supplied != ACCESS_TOKEN:
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
 @app.get("/")
 async def index():
     return FileResponse(os.path.join(static_dir, "index.html"))
@@ -196,9 +306,12 @@ async def get_transcripts(
     offset: int = Query(0, ge=0),
     keyword: str = Query(None),
 ):
-    """查询历史识别记录。"""
-    records = list_transcripts(limit=limit, offset=offset, keyword=keyword)
-    return {"items": [r.to_dict() for r in records], "total": len(records)}
+    """查询历史识别记录；total 为匹配总数（不受分页影响）。"""
+    records = await asyncio.to_thread(
+        list_transcripts, limit=limit, offset=offset, keyword=keyword
+    )
+    total = await asyncio.to_thread(count_transcripts, keyword=keyword)
+    return {"items": [r.to_dict() for r in records], "total": total}
 
 
 @app.get("/api/settings")
@@ -274,6 +387,7 @@ async def health():
         "asr_start_time": cfg.get("asr_start_time"),
         "asr_end_time": cfg.get("asr_end_time"),
         "asr_active": asr_active(cfg),
+        "asr_blocked": time.monotonic() < _asr_blocked_until,
         "stream_paused": bool(_streamer and _streamer.paused),
         "stream_running": bool(_stream_task and not _stream_task.done()),
     }
@@ -281,14 +395,22 @@ async def health():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    if ACCESS_TOKEN:
+        supplied = (
+            ws.query_params.get("token")
+            or ws.headers.get("x-access-token")
+            or ""
+        )
+        if supplied != ACCESS_TOKEN:
+            await ws.close(code=4401)
+            return
+
     await ws.accept()
-    _active_clients.append(ws)
+    client = WSClient(ws)
+    _clients[ws] = client
     if _streamer is not None and _streamer.paused:
-        try:
-            await ws.send_json({"type": "stream", "paused": True})
-        except Exception:
-            pass
-    logger.info("WebSocket 客户端连接，当前 %d 个", len(_active_clients))
+        client.offer({"type": "stream", "paused": True})
+    logger.info("WebSocket 客户端连接，当前 %d 个", len(_clients))
     try:
         while True:
             raw = await ws.receive_text()
@@ -297,26 +419,18 @@ async def websocket_endpoint(ws: WebSocket):
             except ValueError:
                 continue
             if msg.get("type") == "listen":
-                if msg.get("on"):
-                    if ws not in _listeners:
-                        _listeners.append(ws)
-                    logger.info("客户端开启实时监听，监听数 %d", len(_listeners))
-                else:
-                    if ws in _listeners:
-                        _listeners.remove(ws)
-                    logger.info("客户端关闭实时监听，监听数 %d", len(_listeners))
+                client.listening = bool(msg.get("on"))
+                logger.info(
+                    "客户端%s实时播放，播放数 %d",
+                    "开启" if client.listening else "关闭",
+                    sum(1 for c in _clients.values() if c.listening),
+                )
     except WebSocketDisconnect:
         pass
     finally:
-        if ws in _active_clients:
-            _active_clients.remove(ws)
-        if ws in _listeners:
-            _listeners.remove(ws)
-        logger.info(
-            "WebSocket 客户端断开，剩余 %d 个，监听 %d 个",
-            len(_active_clients),
-            len(_listeners),
-        )
+        _clients.pop(ws, None)
+        client.close()
+        logger.info("WebSocket 客户端断开，剩余 %d 个", len(_clients))
 
 
 if __name__ == "__main__":

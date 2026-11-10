@@ -106,16 +106,17 @@ class TencentASR(BaseASR):
         data = resp.json().get("Response", {})
         if "Error" in data:
             err = data["Error"]
-            logger.error("腾讯云 ASR 错误: %s %s", err.get("Code"), err.get("Message"))
-            return ""
+            raise RuntimeError(
+                f"腾讯云 ASR {err.get('Code')}: {err.get('Message')}"
+            )
         return (data.get("Result") or "").strip()
 
     async def recognize(self, pcm: bytes) -> str:
         if not self.secret_id or not self.secret_key:
-            logger.error("未配置腾讯云 SecretId/SecretKey，跳过识别")
-            return ""
+            raise RuntimeError("未配置腾讯云 SecretId/SecretKey")
         try:
             return await asyncio.to_thread(self._recognize_sync, pcm)
         except Exception as e:
+            # 上抛给 main.py 统一做连续失败计数与熔断退避
             logger.error("腾讯云 ASR 请求失败: %s", e)
-            return ""
+            raise

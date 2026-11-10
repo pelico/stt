@@ -30,11 +30,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "whisper-1"
 
-    # 音频采样率（固定 16kHz，ASR 要求）
-    sample_rate: int = 16000
+    # OpenAI 兼容接口单次识别超时（秒）
+    asr_timeout: int = 45
 
-    # 声道数（固定单声道）
-    channels: int = 1
+    # 采样率（固定 16kHz，ASR 要求）
+    sample_rate: int = 16000
 
     # VAD 模式 0-3，越大越激进（越容易判定为静音）
     vad_mode: int = 3
@@ -50,6 +50,12 @@ class Settings(BaseSettings):
 
     # 一段语音里"真语音帧"的最低占比：噪声往往只有零星几帧被 VAD 判为语音
     vad_min_speech_ratio: float = 0.5
+
+    # 切段时向前补的音频（毫秒）：VAD 判定滞后 1~2 帧，不补会吞掉字头
+    vad_preroll_ms: int = 200
+
+    # 切段时尾部保留的静音（毫秒）：整段 600ms 静音尾送进模型是幻觉高发区
+    vad_tail_pad_ms: int = 150
 
     # 能量门限（dBFS）：低于该音量的帧不判定为语音，-80 ~ -10
     vad_rms_dbfs: int = -45
@@ -86,11 +92,18 @@ class Settings(BaseSettings):
     save_audio: bool = False
     audio_dir: str = "/data/audio"
 
-    # ffmpeg 路径
+    # 是否把"被过滤掉"的音频片段存成 WAV，便于回听判断是否误杀（调试用）
+    save_rejected_audio: bool = False
+    rejected_audio_max: int = 50
+
+    # 可选访问口令（空=不启用）。启用后 /api/* 与 /ws 需带该口令
+    access_token: str = ""
+
+    # ffmpeg 可执行文件名
     ffmpeg_path: str = "ffmpeg"
 
-    # ffmpeg 拉流超时（秒）
-    ffmpeg_timeout: int = 30
+    # 拉流超时（秒）：同时用作 -rw_timeout 和"无音频数据"看门狗
+    ffmpeg_timeout: int = 20
 
     # 日志级别
     log_level: str = "INFO"
