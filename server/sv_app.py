@@ -5,9 +5,12 @@ Serves POST /v1/audio/transcriptions (multipart) using sherpa-onnx + SenseVoice 
 
 v2 改进（2026-11-10）：
   1. 固定中文提示 language="zh"，显著减少纯噪声时蹦出英文单词的幻觉；
-  2. 解析 SenseVoice 事件标签，非 Speech（音乐/咳嗽/呼吸/噪声等）直接返回空文本；
-  3. 语气词/单字/重复单字结果直接返回空文本，让调用方天然丢弃。
-以上均可用环境变量关闭，方便对照排查。
+  2. 语气词/单字/重复单字结果直接返回空文本，让调用方天然丢弃；
+  3. 若运行时版本把 SenseVoice 事件标签保留在 result.text 里，则顺手判非语音事件。
+     注意：sherpa-onnx v2.0.1 的 ConvertSenseVoiceResult 会跳过前 4 个 token
+     （语种/情感/事件/ITN），因此该版本拿不到事件标签，此项属于前瞻兼容。
+     真正的非语音拦截依赖 rtsp-stt 端的 VAD 能量/占比门限。
+以上过滤可用 SV_FILTER=0 关闭，语种可用 SV_LANGUAGE=auto 恢复自动。
 """
 import logging
 import os
@@ -135,7 +138,7 @@ async def transcriptions(
         logger.info("raw=%r tags=%s -> %r", raw, tags, text)
 
         if FILTER_ENABLED:
-            # 事件标签是最可靠的非语音判据（咳嗽/呼吸/音乐/噪声）
+            # v2.0.1 会丢弃标签 token，events 通常为空；保留此判断以兼容未来版本
             if events and not all(e == "Speech" for e in events):
                 logger.info("丢弃非语音事件: %s", events)
                 return {"text": ""}
