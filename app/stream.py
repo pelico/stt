@@ -15,7 +15,6 @@ import webrtcvad
 
 from app.config import settings
 from app.pending_store import PendingStore, utc_iso_naive
-from app.runtime_config import asr_active
 
 try:  # Python <= 3.12 自带；3.13+ 已移除，用纯 Python 兜底
     import audioop
@@ -221,8 +220,10 @@ class AudioStreamer:
         """
         store = self._store
         while True:
-            # 暂停/时段外：保留积压，等恢复后继续补完，不消耗重试次数
-            if not asr_active(self.cfg):
+            # 手动暂停（总开关关）：积压保留，等恢复后继续补完，不消耗重试次数。
+            # 时段外不停：拉流已断、不会再有新段，但已积压的话应继续补转完，
+            # 否则夜里切一段听不完的对话要等到第二天早上才有结果。
+            if not bool(self.cfg.get("asr_enabled", True)):
                 self._backlog, self._backlog_bytes, self._lag_sec = (
                     await asyncio.to_thread(store.stats)
                 )

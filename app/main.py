@@ -184,8 +184,10 @@ async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -
         if captured_at else 0.0
     )
     backlog = _streamer.backlog if _streamer else 0
-    if not asr_active(cfg):
-        logger.debug("当前已暂停或不在识别时段，跳过 %.1f 秒语音", duration_sec)
+    # 只拦「手动暂停」：时段外拉流已停、不会有新段，但补转积压要照常进行，
+    # 这里若按 asr_active 拦截，时段外的积压会被静音跳过并直接出队丢弃
+    if not cfg.get("asr_enabled", True):
+        logger.debug("识别总开关已关闭，跳过 %.1f 秒语音", duration_sec)
         return True
     logger.info(
         "[段] 开始 | 音频 %.1fs/%dKB | 排队 %.1fs | 积压 %d | 引擎 %s | 模式 %s | 连续失败 %d",
