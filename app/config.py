@@ -52,9 +52,10 @@ class Settings(BaseSettings):
     #   realtime 纯内存队列，排队超过 asr_max_queue_age 秒即丢，保证低延迟。
     queue_mode: str = "durable"
 
-    # 完整优先模式的磁盘队列上限（条数 / MB），超出丢最旧并打日志
-    queue_max_items: int = 500
-    queue_max_mb: int = 64
+    # 完整优先模式的磁盘队列上限（条数 / MB），超出丢最旧并打日志。
+    # Web 设置页可热更新，无需重启；上限只防写满磁盘，不代表推荐长期积压
+    queue_max_items: int = 2000
+    queue_max_mb: int = 256
 
     # 单条片段最多尝试识别几次（防止坏音频把 FIFO 永久卡死）；0 = 无限重试
     queue_max_attempts: int = 5

@@ -88,7 +88,12 @@ class AudioStreamer:
             PendingStore() if self._mode == "durable" else None
         )
         self._wakeup = asyncio.Event()
-        self._backlog = self._store.count() if self._store else 0
+        init_count, init_bytes = (
+            self._store.stats() if self._store else (0, 0)
+        )
+        self._backlog = init_count
+        self._backlog_bytes = init_bytes
+        self._last_vacuum = 0.0
 
         # 调试统计
         self._segments = 0
@@ -133,6 +138,7 @@ class AudioStreamer:
             "last_duration_ms": self._last_duration_ms,
             "queued": self._queue.qsize(),
             "backlog": self._backlog,
+            "backlog_bytes": self._backlog_bytes,
             "mode": self._mode,
             "stale": self._stale_dropped,
             "enq": self._enqueued_total,
@@ -154,6 +160,11 @@ class AudioStreamer:
     def backlog(self) -> int:
         """待识别积压条数。"""
         return self._backlog
+
+    @property
+    def backlog_bytes(self) -> int:
+        """待识别音频总字节数。"""
+        return self._backlog_bytes
 
     @property
     def queue_totals(self) -> dict:
@@ -201,15 +212,24 @@ class AudioStreamer:
         while True:
             # 暂停/时段外：保留积压，等恢复后继续补完，不消耗重试次数
             if not asr_active(self.cfg):
-                self._backlog = await asyncio.to_thread(store.count)
+                self._backlog, self._backlog_bytes = await asyncio.to_thread(
+                    store.stats
+                )
                 await asyncio.sleep(2)
                 continue
             item = await asyncio.to_thread(store.peek)
             if item is None:
                 self._backlog = 0
+                self._backlog_bytes = 0
                 self._wakeup.clear()
                 # clear 后再查一次，避免「入队发生在 clear 之前」导致漏唤醒
                 if await asyncio.to_thread(store.count) == 0:
+                    # 空闲期顺手回收磁盘：积压消化完 pending.db 不会自动缩小
+                    now = time.monotonic()
+                    if now - self._last_vacuum > 600:
+                        self._last_vacuum = now
+                        if await asyncio.to_thread(store.maybe_vacuum):
+                            logger.info("[队列] 已清空，回收 pending.db 磁盘空间")
                     await self._wakeup.wait()
                 continue
             row_id, pcm, wall_iso, attempts, queued_sec = item
@@ -250,9 +270,15 @@ class AudioStreamer:
                         "[队列] 第 %d 次识别失败，保留该段，%d 秒后重试 | 积压 %d",
                         attempts + 1, backoff, self._backlog,
                     )
+                # 先刷新积压统计再退避，前端不会看到过期数字
+                self._backlog, self._backlog_bytes = await asyncio.to_thread(
+                    store.stats
+                )
                 # 失败退避，配合 main.py 的熔断，服务端故障期间不空转刷请求
                 await asyncio.sleep(backoff)
-            self._backlog = await asyncio.to_thread(store.count)
+            self._backlog, self._backlog_bytes = await asyncio.to_thread(
+                store.stats
+            )
 
     async def _consume_realtime(self):
         """实时优先：内存队列，排队超过阈值的片段直接丢弃。"""
@@ -306,7 +332,9 @@ class AudioStreamer:
                 self._fail_total += 1
                 logger.error("[队列] 落盘失败，该段已丢失: %s", e)
                 return
-            self._backlog = backlog
+            self._backlog, self._backlog_bytes = await asyncio.to_thread(
+                self._store.stats
+            )
             self._enqueued_total += 1
             logger.info(
                 "[队列] 入队 %.1fs/%dKB | 积压 %d | 上限 %d条/%dMB",

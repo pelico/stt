@@ -17,8 +17,8 @@ services:
       # 识别队列：默认「完整优先」，语音段落盘 ./data/pending.db，ASR 慢时后台补识别不丢数据
       # 要低延迟（宁可丢旧片段）改成 realtime；切换后需重启容器
       # - QUEUE_MODE=realtime
-      # - QUEUE_MAX_ITEMS=500
-      # - QUEUE_MAX_MB=64
+      # - QUEUE_MAX_ITEMS=2000
+      # - QUEUE_MAX_MB=256
       # 诊断：连接/读取超时分开、慢请求阈值；完整日志轮转落盘 ./data/logs/stt.log
       # - ASR_CONNECT_TIMEOUT=10
       # - ASR_SLOW_MS=10000

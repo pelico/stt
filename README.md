@@ -108,8 +108,8 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `LOG_FILE_PATH` | `/data/logs/stt.log` | 日志文件路径，位于持久化卷内 |
 | `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `5` / `3` | 单文件大小与保留份数 |
 | `QUEUE_MODE` | `durable` | `durable`=完整优先（落盘 FIFO，不丢）/ `realtime`=实时优先（过期丢弃）。**切换需重启容器** |
-| `QUEUE_MAX_ITEMS` | `500` | 完整优先模式队列条数上限，超出丢最旧并打日志 |
-| `QUEUE_MAX_MB` | `64` | 完整优先模式磁盘硬上限，防止写满 `./data` 卷 |
+| `QUEUE_MAX_ITEMS` | `2000` | 完整优先模式队列条数上限，超出丢最旧并打日志；Web 设置页可热更新（1~10000） |
+| `QUEUE_MAX_MB` | `256` | 完整优先模式磁盘硬上限（1~1024），防止写满 `./data` 卷；积压清空后自动 VACUUM 回收空间 |
 | `QUEUE_MAX_ATTEMPTS` | `5` | 单条片段最多尝试识别几次，防坏音频卡死 FIFO；`0` = 无限重试 |
 | `ASR_MAX_QUEUE_AGE` | `10` | 仅 `realtime` 模式：排队最长等待秒数，超时直接丢弃；`0` = 不限制 |
 | `TZ` | `UTC` | **容器时区**，务必设成 `Asia/Shanghai`，否则识别时段与日志时间差 8 小时 |

@@ -153,3 +153,26 @@ class PendingStore:
                 lambda conn: conn.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
             )
         )
+
+    def stats(self) -> Tuple[int, int]:
+        """返回 (积压条数, 待识别音频总字节数)。"""
+        def _do(conn):
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM pending"
+            ).fetchone()
+            return int(row[0]), int(row[1])
+        return self._run(_do)
+
+    def maybe_vacuum(self, threshold_mb: int = 64) -> bool:
+        """队列清空后回收磁盘：SQLite DELETE 不缩小文件，积压消化完
+        pending.db 仍占着峰值空间。空表且文件超过阈值时执行 VACUUM。
+        返回是否执行了回收。"""
+        try:
+            if self.count() != 0:
+                return False
+            if os.path.getsize(self.path) < threshold_mb * 1024 * 1024:
+                return False
+        except OSError:
+            return False
+        self._run(lambda conn: conn.execute("VACUUM"))
+        return True
