@@ -63,7 +63,8 @@ class Settings(BaseSettings):
     # 消费端相邻段合并：采集间隔小于该秒数的相邻语音段合并成一次识别请求，
     # 摊薄每请求约 2 秒的固定开销（CF 两跳 + WAV 封装 + 服务端排队），
     # 吞吐约翻 2~3 倍，连续对话滞后明显下降；上下文变长断句也更准。0 = 关闭
-    asr_merge_gap_sec: float = 1.0
+    # 默认 2s：VAD 600ms 静音就切段，自然停顿多落在 0.6~1.5s，1s 阈值会漏一半
+    asr_merge_gap_sec: float = 2.0
 
     # 合并块的最大音频时长（秒）：防止单个请求过大拖慢单次推理
     asr_merge_max_sec: int = 30

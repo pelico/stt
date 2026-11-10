@@ -366,7 +366,12 @@ async def access_guard(request: Request, call_next):
 
 @app.get("/")
 async def index():
-    return FileResponse(os.path.join(static_dir, "index.html"))
+    # no-cache：浏览器每次都带 ETag 协商（命中仍 304），保证升级镜像后
+    # 刷新页面就能拿到新版界面，不会拿旧 JS 还以为功能退回了
+    return FileResponse(
+        os.path.join(static_dir, "index.html"),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/api/transcripts")

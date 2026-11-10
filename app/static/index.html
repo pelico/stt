@@ -633,6 +633,16 @@
         <input type="range" id="queue_max_mb" min="8" max="1024" step="8" />
         <div class="hint">待识别队列的磁盘硬上限，防止把 ./data 卷写满。保存即生效，无需重启；设置前确认 ./data 所在磁盘剩余空间足够。积压清空后会自动回收 pending.db 占用的空间。</div>
       </div>
+      <div class="field">
+        <label>段合并间隔 <span class="value-tag" id="merge_gap_val">2 s</span></label>
+        <input type="range" id="asr_merge_gap_sec" min="0" max="5" step="0.5" />
+        <div class="hint">完整优先模式下，采集间隔小于该秒数的相邻语音段合并成一次识别请求：摊薄每请求约 2 秒的固定开销，吞吐翻 2~3 倍，连续对话滞后明显下降，上下文变长断句也更准。0 = 关闭合并。保存即生效，无需重启。</div>
+      </div>
+      <div class="field">
+        <label>合并块时长上限 <span class="value-tag" id="merge_max_val">30 s</span></label>
+        <input type="range" id="asr_merge_max_sec" min="10" max="120" step="5" />
+        <div class="hint">合并后的单次识别请求最长包含多少秒音频，防止单请求过大拖慢单次推理。完整优先模式生效。</div>
+      </div>
     </div>
 
     <div class="group">
@@ -945,6 +955,8 @@ function syncVadLabels() {
   document.getElementById('queue_age_val').textContent = document.getElementById('asr_max_queue_age').value + ' s';
   document.getElementById('queue_items_val').textContent = document.getElementById('queue_max_items').value;
   document.getElementById('queue_mb_val').textContent = document.getElementById('queue_max_mb').value + ' MB';
+  document.getElementById('merge_gap_val').textContent = document.getElementById('asr_merge_gap_sec').value + ' s';
+  document.getElementById('merge_max_val').textContent = document.getElementById('asr_merge_max_sec').value + ' s';
 }
 
 async function loadRtspHistory() {
@@ -1018,6 +1030,8 @@ async function loadSettings() {
   document.getElementById('queue_mode').value = v.queue_mode ?? 'durable';
   document.getElementById('queue_max_items').value = v.queue_max_items ?? 2000;
   document.getElementById('queue_max_mb').value = v.queue_max_mb ?? 256;
+  document.getElementById('asr_merge_gap_sec').value = v.asr_merge_gap_sec ?? 2;
+  document.getElementById('asr_merge_max_sec').value = v.asr_merge_max_sec ?? 30;
   document.getElementById('save_rejected_audio').checked = !!v.save_rejected_audio;
   document.getElementById('filter_noise_text').checked = v.filter_noise_text ?? true;
   document.getElementById('filter_ignore_words').value = v.filter_ignore_words ?? '';
@@ -1054,6 +1068,8 @@ async function saveSettings() {
     queue_mode: document.getElementById('queue_mode').value,
     queue_max_items: parseInt(document.getElementById('queue_max_items').value, 10),
     queue_max_mb: parseInt(document.getElementById('queue_max_mb').value, 10),
+    asr_merge_gap_sec: parseFloat(document.getElementById('asr_merge_gap_sec').value),
+    asr_merge_max_sec: parseInt(document.getElementById('asr_merge_max_sec').value, 10),
     save_rejected_audio: document.getElementById('save_rejected_audio').checked,
     filter_noise_text: document.getElementById('filter_noise_text').checked,
     filter_ignore_words: document.getElementById('filter_ignore_words').value.trim(),
@@ -1275,7 +1291,7 @@ document.getElementById('cancel-settings').addEventListener('click', closeDrawer
 drawerMask.addEventListener('click', closeDrawer);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 document.getElementById('asr_engine').addEventListener('change', (e) => applyEnginePanels(e.target.value));
-['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio', 'vad_preroll_ms', 'vad_tail_pad_ms', 'ffmpeg_timeout', 'asr_max_queue_age', 'queue_max_items', 'queue_max_mb'].forEach(id => {
+['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio', 'vad_preroll_ms', 'vad_tail_pad_ms', 'ffmpeg_timeout', 'asr_max_queue_age', 'queue_max_items', 'queue_max_mb', 'asr_merge_gap_sec', 'asr_merge_max_sec'].forEach(id => {
   document.getElementById(id).addEventListener('input', syncVadLabels);
 });
 document.addEventListener('keydown', (e) => {

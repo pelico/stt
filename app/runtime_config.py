@@ -39,6 +39,8 @@ FIELD_TYPES: Dict[str, type] = {
     "queue_max_items": int,
     "queue_max_mb": int,
     "queue_max_attempts": int,
+    "asr_merge_gap_sec": float,
+    "asr_merge_max_sec": int,
     "filter_noise_text": bool,
     "filter_ignore_words": str,
     "save_rejected_audio": bool,
@@ -83,6 +85,8 @@ DEFAULTS: Dict[str, Any] = {
     "queue_max_items": settings.queue_max_items,
     "queue_max_mb": settings.queue_max_mb,
     "queue_max_attempts": settings.queue_max_attempts,
+    "asr_merge_gap_sec": settings.asr_merge_gap_sec,
+    "asr_merge_max_sec": settings.asr_merge_max_sec,
     "filter_noise_text": settings.filter_noise_text,
     "filter_ignore_words": settings.filter_ignore_words,
     "save_rejected_audio": settings.save_rejected_audio,
@@ -199,6 +203,10 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("queue_max_mb 必须在 1 ~ 1024")
     if key == "queue_max_attempts" and not (0 <= value <= 100):
         raise ValueError("queue_max_attempts 必须在 0 ~ 100（0 = 无限重试）")
+    if key == "asr_merge_gap_sec" and not (0 <= value <= 10):
+        raise ValueError("asr_merge_gap_sec 必须在 0 ~ 10 秒（0 = 关闭合并）")
+    if key == "asr_merge_max_sec" and not (10 <= value <= 120):
+        raise ValueError("asr_merge_max_sec 必须在 10 ~ 120 秒")
     if key == "filter_ignore_words" and len(str(value)) > 2000:
         raise ValueError("filter_ignore_words 过长")
     if key == "asr_engine" and value not in ENGINES:
