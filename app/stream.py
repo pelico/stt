@@ -197,6 +197,11 @@ class AudioStreamer:
         "error", "failed", "invalid", "unauthorized", "401", "403", "404",
         "refused", "timed out", "no route", "could not", "denied",
     )
+    # 已知无害告警：摄像头 RTP 时间戳不单调，裸 PCM 输出不依赖时间戳，刷屏无意义
+    _FFMPEG_IGNORE_HINTS = (
+        "non monotonically increasing dts",
+        "application provided invalid, non monotonically",
+    )
 
     async def _drain_stderr(self, proc):
         """把 ffmpeg 的关键错误转进应用日志，方便在网页日志页排查拉流问题。"""
@@ -208,7 +213,10 @@ class AudioStreamer:
                 if not raw:
                     break
                 line = raw.decode("utf-8", "replace").strip()
-                if line and any(h in line.lower() for h in self._FFMPEG_ERROR_HINTS):
+                low = line.lower()
+                if line and any(h in low for h in self._FFMPEG_ERROR_HINTS) and not any(
+                    h in low for h in self._FFMPEG_IGNORE_HINTS
+                ):
                     logger.warning("ffmpeg: %s", line)
         except asyncio.CancelledError:
             pass
@@ -218,6 +226,10 @@ class AudioStreamer:
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
+            # 部分摄像头 RTP 时间戳不前进/跳变，用墙钟时间戳 + genpts 保证单调，
+            # 否则 s16le muxer 每包刷 "non monotonically increasing dts" 告警
+            "-use_wallclock_as_timestamps", "1",
+            "-fflags", "+genpts",
             "-i", url,
             "-vn",
             "-acodec", "pcm_s16le",
