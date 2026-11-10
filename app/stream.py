@@ -98,6 +98,16 @@ class AudioStreamer:
         self._stale_dropped = 0
         self._last_stale_log = 0.0
 
+        # ffmpeg 参数兼容性降级：老版本 ffmpeg（嵌入式/精简构建）可能不认识
+        # -rw_timeout / 墙钟时间戳选项，报 "Option not found" 连输入文件都
+        # 打不开。首次报错后自动去掉对应参数并快速重连，只损失该参数的功能。
+        self._rw_timeout_ok = True
+        self._wallclock_ok = True
+        self._fallback_changed = False
+        # 每次拉流最多降级一个选项：同一次 stderr 里连续多行
+        # "Option not found" 不应把还没试过的选项也去掉
+        self._option_fix_applied = False
+
     def _get_vad(self) -> webrtcvad.Vad:
         mode = self.cfg.get("vad_mode", 3)
         if self._vad is None or mode != self._vad_mode:
@@ -183,7 +193,11 @@ class AudioStreamer:
                 if await asyncio.to_thread(store.count) == 0:
                     await self._wakeup.wait()
                 continue
-            row_id, pcm, wall_iso, attempts = item
+            row_id, pcm, wall_iso, attempts, queued_sec = item
+            logger.info(
+                "[队列] 出队 | 等待 %.1fs | 积压 %d | 第 %d 次尝试 | 模式 %s",
+                max(0.0, queued_sec), self._backlog, attempts + 1, self._mode,
+            )
             try:
                 done = await self.on_speech_segment(pcm, wall_iso)
             except asyncio.CancelledError:
@@ -204,12 +218,19 @@ class AudioStreamer:
                 except (TypeError, ValueError):
                     max_attempts = settings.queue_max_attempts
                 removed = await asyncio.to_thread(store.bump, row_id, max_attempts)
+                backoff = min(30, 2 ** min(attempts, 4))
                 if removed:
                     logger.warning(
-                        "语音段连续 %d 次识别失败，已丢弃以免卡住队列", attempts + 1
+                        "[队列] 第 %d 次识别失败已达上限 %d，丢弃该段以免卡住 FIFO | 积压 %d",
+                        attempts + 1, max_attempts, self._backlog,
+                    )
+                else:
+                    logger.warning(
+                        "[队列] 第 %d 次识别失败，保留该段，%d 秒后重试 | 积压 %d",
+                        attempts + 1, backoff, self._backlog,
                     )
                 # 失败退避，配合 main.py 的熔断，服务端故障期间不空转刷请求
-                await asyncio.sleep(min(30, 2 ** min(attempts, 4)))
+                await asyncio.sleep(backoff)
             self._backlog = await asyncio.to_thread(store.count)
 
     async def _consume_realtime(self):
@@ -248,23 +269,26 @@ class AudioStreamer:
     async def _enqueue(self, segment: bytes):
         """VAD 切出一段语音后入队。"""
         if self._mode == "durable":
+            max_items = int(self.cfg.get("queue_max_items", settings.queue_max_items))
+            max_mb = int(self.cfg.get("queue_max_mb", settings.queue_max_mb))
             try:
                 backlog, dropped = await asyncio.to_thread(
-                    self._store.put,
-                    segment,
-                    utc_iso_naive(),
-                    int(self.cfg.get("queue_max_items", settings.queue_max_items)),
-                    int(self.cfg.get("queue_max_mb", settings.queue_max_mb)),
+                    self._store.put, segment, utc_iso_naive(), max_items, max_mb,
                 )
             except Exception as e:
-                logger.error("待识别队列落盘失败，该段已丢失: %s", e)
+                logger.error("[队列] 落盘失败，该段已丢失: %s", e)
                 return
             self._backlog = backlog
+            logger.info(
+                "[队列] 入队 %.1fs/%dKB | 积压 %d | 上限 %d条/%dMB",
+                len(segment) / (self.sample_rate * 2), len(segment) // 1024,
+                backlog, max_items, max_mb,
+            )
             if dropped:
                 logger.warning(
-                    "待识别队列已达上限，丢弃最旧 %d 段（当前积压 %d 段）；"
+                    "[队列] 已达上限（%d条/%dMB），丢弃最旧 %d 段 | 当前积压 %d；"
                     "ASR 长期跟不上产出速度，请排查服务端推理耗时",
-                    dropped, backlog,
+                    max_items, max_mb, dropped, backlog,
                 )
             self._wakeup.set()
             return
@@ -329,6 +353,10 @@ class AudioStreamer:
             if healthy:
                 self._fail_streak = 0
                 delay = 5
+            elif self._fallback_changed:
+                # 参数兼容性降级后立即重试，别让 60 秒退避拖住恢复
+                self._fallback_changed = False
+                delay = 2
             else:
                 self._fail_streak += 1
                 delay = min(60, 5 * (2 ** min(self._fail_streak - 1, 4)))
@@ -356,6 +384,25 @@ class AudioStreamer:
         if not line:
             return
         low = line.lower()
+        # 老版本 ffmpeg 不认识的输入选项会在打开文件时报
+        # "Option not found"，按顺序降级：先去 -rw_timeout，再去墙钟时间戳
+        if "option not found" in low and not self._option_fix_applied:
+            if self._rw_timeout_ok:
+                self._rw_timeout_ok = False
+                self._fallback_changed = True
+                self._option_fix_applied = True
+                logger.warning(
+                    "当前 ffmpeg 不支持 -rw_timeout（老版本无该选项），"
+                    "下次重连自动去掉该参数；半开检测仅依赖无数据看门狗"
+                )
+            elif self._wallclock_ok:
+                self._wallclock_ok = False
+                self._fallback_changed = True
+                self._option_fix_applied = True
+                logger.warning(
+                    "当前 ffmpeg 不支持墙钟时间戳选项，下次重连自动去掉；"
+                    "如果摄像头时间戳不单调，可能重新出现 dts 告警刷屏"
+                )
         if any(h in low for h in self._FFMPEG_ERROR_HINTS) and not any(
             h in low for h in self._FFMPEG_IGNORE_HINTS
         ):
@@ -394,19 +441,22 @@ class AudioStreamer:
         url = self.cfg.get("rtsp_url")
         highpass = int(self.cfg.get("ffmpeg_highpass", 100))
         timeout_sec = max(5, int(self.cfg.get("ffmpeg_timeout", 20)))
+        # 新一次拉流允许再降级一个不支持的选项
+        self._option_fix_applied = False
         cmd = [
             settings.ffmpeg_path,
             "-hide_banner", "-nostats", "-loglevel", "warning",
             "-rtsp_transport", "tcp",
-            # 网络半开时不要无限等；配合下面的无数据看门狗双保险
-            "-rw_timeout", str(timeout_sec * 1_000_000),
+        ]
+        # 网络半开时不要无限等；配合下面的无数据看门狗双保险。
+        # ffmpeg 不支持该选项时由 _log_ffmpeg_line 自动置 False 降级
+        if self._rw_timeout_ok:
+            cmd += ["-rw_timeout", str(timeout_sec * 1_000_000)]
+        if self._wallclock_ok:
             # 部分摄像头 RTP 时间戳不前进/跳变，用墙钟时间戳 + genpts 保证单调，
             # 否则 s16le muxer 每包刷 "non monotonically increasing dts" 告警
-            "-use_wallclock_as_timestamps", "1",
-            "-fflags", "+genpts",
-            "-i", url,
-            "-vn",
-        ]
+            cmd += ["-use_wallclock_as_timestamps", "1", "-fflags", "+genpts"]
+        cmd += ["-i", url, "-vn"]
         if highpass > 0:
             # 风声/风扇/电源嗡鸣等低频噪声常把 VAD 误触发，高通滤波成本极低
             cmd += ["-af", f"highpass=f={highpass}"]

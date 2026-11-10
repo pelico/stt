@@ -22,6 +22,7 @@
 - **抗断流**：关掉 ffmpeg 进度输出、网络 I/O 超时 + 无数据看门狗、失败按 5→10→20→40→60 秒退避重连，摄像头 TCP 半开不会静默卡死
 - **识别服务熔断**：连续失败 3 次自动退避探活，云端模型重载期间不再把识别队列占满
 - **双模式识别队列**：默认「完整优先」——语音段落盘 `./data/pending.db`，ASR 慢时按采集顺序在后台慢慢补识别、容器重启不丢，入库时间仍是说话时刻；需要低延迟可切「实时优先」按等待时间丢弃。VAD 状态栏与 `/api/health` 都能看积压数
+- **结构化诊断日志**：每次 ASR 调用带 `req#`、目标 URL、双超时配置、音频大小、耗时/首字节时间、错误码与排查建议；日志页可按级别/关键字过滤并显示诊断摘要，同时轮转落盘到 `/data/logs/stt.log`
 - **句首补帧 / 句尾裁静音**：补 200ms 前置音频避免 VAD 滞后吞字头，裁掉多余静音尾减少幻觉文本和推理耗时
 - **广播解耦**：每个 WebSocket 独立发送队列，慢客户端不会拖住音频采集与 VAD
 - **被过滤音频留证**（可选）：把 VAD / 文本层丢弃的片段存成 WAV 回听，判断是噪声还是误杀
@@ -99,7 +100,12 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容接口地址 |
 | `OPENAI_API_KEY` | 空 | OpenAI 兼容接口 Key |
 | `OPENAI_MODEL` | `whisper-1` | 转写模型 |
-| `ASR_TIMEOUT` | `45` | OpenAI 兼容接口单次识别超时（秒） |
+| `ASR_TIMEOUT` | `45` | 读取超时（秒）：服务端算得慢时的等待上限 |
+| `ASR_CONNECT_TIMEOUT` | `10` | 连接超时（秒）：与读取超时分开，异常能区分「连不上」和「算得慢」 |
+| `ASR_SLOW_MS` | `10000` | 超过该毫秒数打一条「慢请求」WARNING |
+| `LOG_FILE_ENABLED` | `true` | 运行日志轮转落盘（页面内存缓冲重启即清空，事后排查靠文件） |
+| `LOG_FILE_PATH` | `/data/logs/stt.log` | 日志文件路径，位于持久化卷内 |
+| `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `5` / `3` | 单文件大小与保留份数 |
 | `QUEUE_MODE` | `durable` | `durable`=完整优先（落盘 FIFO，不丢）/ `realtime`=实时优先（过期丢弃）。**切换需重启容器** |
 | `QUEUE_MAX_ITEMS` | `500` | 完整优先模式队列条数上限，超出丢最旧并打日志 |
 | `QUEUE_MAX_MB` | `64` | 完整优先模式磁盘硬上限，防止写满 `./data` 卷 |
@@ -165,11 +171,40 @@ FastAPI → SQLite（历史，timestamp=说话时刻）+ WebSocket → 浏览器
 
 **队列位置不解决速度差**：单段识别 55 秒、VAD 每 1~2 秒产一段时，长期平均产出速率远大于消费速率，任何有限队列都会溢出，`QUEUE_MAX_ITEMS` / `QUEUE_MAX_MB` 只是把「按等待时间丢」换成「按容量丢最旧」。实际能不能补完，取决于说话是否间歇——安静下来后后台会按采集顺序把积压补完（日志会打「延迟 N 秒补处理」）。要稳定不丢，仍需把服务端单次推理压到几秒内（查 `vmstat si/so`、`MemoryMax`、模型 mmap 页是否被回收）。
 
+## 诊断日志：超时怎么定位
+
+一次请求在日志里是几行，用 `req#N` 串起来：
+
+```text
+16:40:01 INFO  [段] 开始 | 音频 1.9s/60KB | 排队 0.2s | 积压 9 | 引擎 openai | 模式 durable | 连续失败 0
+16:40:01 INFO  [ASR] req#18 → POST https://<域名>/stt/v1/audio/transcriptions | host=<域名> model=sensevoice-small lang=zh audio=1.9s/60KB wav=61KB timeout=(connect 10s, read 45s)
+16:40:46 ERROR [ASR] req#18 ✗ read_timeout after 45.02s | host=<域名> | requests.exceptions.ReadTimeout: ... | 建议: 连接已建立但服务端在读取超时内没返回，检查 GCP 的 CPU/swap/模型加载
+16:40:46 ERROR [段] 失败 | 连续 1/3 次 | 耗时 45.03s | 排队 0.2s | 积压 14 | ReadTimeout: ...
+```
+
+直接可读：音频多大、请求了谁、连接/读取超时各设多少、等了多久、积压涨到多少、连续失败几次。**超时拆成 connect/read 两个值**后，握手失败和推理慢不会再混成一句 `Read timed out`。成功时还会打 `ttfb`（响应头到达耗时）与响应体大小；超过 `ASR_SLOW_MS` 额外打一条「慢请求」WARNING。
+
+| 错误码 | 含义 | 先查哪里 |
+|---|---|---|
+| `connect_timeout` | TCP/TLS 握手超时 | 防火墙、Cloudflare 回源、Caddy 是否存活、DNS |
+| `read_timeout` | 连上了但服务端没按时返回 | GCP 的 `vmstat si/so`、`MemoryMax`、sensevoice 进程；本机直连 vs 经域名计时对比 |
+| `http_502/503/504` | 反代/上游不可用 | Caddy 反代目标与 `journalctl -u sensevoice` |
+| `http_401/403` | 鉴权失败 | API Key、反代是否透传 `Authorization` |
+| `http_404` | 路径不存在 | `OPENAI_BASE_URL` 与 `handle_path` 前缀 |
+| `bad_response` | 返回了错误页而非 JSON | 反代是否把请求转到了别处 |
+
+日志面板支持按级别和关键字过滤（搜 `read_timeout`、`req#18`、`慢请求` 都行），顶部摘要实时显示成功率、最近/P95 耗时、慢请求数、连续失败数、积压与当前超时配置；`/api/health` 的 `diagnostics` 是同一份数据。完整历史在容器内轮转文件里：
+
+```bash
+docker exec rtsp-stt sh -c "grep -E 'read_timeout|慢请求|熔断' /data/logs/stt.log | tail -50"
+```
+
 ## 稳定性设计（都是踩过的坑）
 
 | 隐患 | 处理 |
 |---|---|
 | ffmpeg 的 `-stats` 进度用 `\r` 刷行，`readline()` 会累积到 64KB 抛异常，之后 stderr 管道写满 → ffmpeg 阻塞 → 拉流静默冻死，而 health 仍显示运行中 | 命令加 `-hide_banner -nostats -loglevel warning`；stderr 改按块读取并自行按 `\r`/`\n` 切分，兜底捕获所有异常 |
+| 老版本 ffmpeg（嵌入式/精简构建）不认识 `-rw_timeout`，报 `Error opening input files: Option not found`，拉流反复失败 | 检测到 `Option not found` 自动降级：先去 `-rw_timeout`，仍报错再去墙钟时间戳选项，2 秒内快速重连；半开检测退化为仅靠无数据看门狗 |
 | RTSP TCP 半开（摄像头断电/换 IP）时 `read()` 永不返回 | `-rw_timeout` + 应用层「N 秒无音频数据即断开」，按 5→10→20→40→60 秒指数退避重连 |
 | 云端模型重载要几分钟，每段都等一次超时会把串行识别队列占满 | 连续失败 3 次熔断退避（5→10→…→60 秒），恢复后自动清零，页面弹提示 |
 | ASR 单次推理要 30~60 秒（1G 内存小机器 + swap），VAD 每 1~2 秒切一片，队列越堆越深，最后刷一片 `Read timed out` | 默认 `durable`：片段落盘 FIFO，后台按采集顺序补完，慢只带来延迟不丢数据，结果时间戳仍是说话时刻；`realtime` 模式才按 `ASR_MAX_QUEUE_AGE` 丢弃。**长期平均产出快于识别时任何有限队列都会溢出**，上限只是延缓，治本仍是降低服务端推理耗时 |

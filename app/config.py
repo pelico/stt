@@ -30,8 +30,20 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "whisper-1"
 
-    # OpenAI 兼容接口单次识别超时（秒）
+    # OpenAI 兼容接口读取超时（秒）：服务端算得慢时的等待上限
     asr_timeout: int = 45
+
+    # 连接阶段超时（秒）：与读取超时分开，异常就能区分「连不上」和「算得慢」
+    asr_connect_timeout: int = 10
+
+    # 超过该毫秒数视为慢请求，额外打一条 WARNING（含耗时与排查方向）
+    asr_slow_ms: int = 10000
+
+    # 运行日志落盘：排查超时往往是事后，页面内存缓冲重启即清空
+    log_file_enabled: bool = True
+    log_file_path: str = "/data/logs/stt.log"
+    log_file_max_mb: int = 5
+    log_file_backups: int = 3
 
     # 识别队列模式（默认「完整优先」）：
     #   durable  片段落盘到 /data/pending.db，按采集顺序 FIFO 慢慢补识别，

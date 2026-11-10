@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 import requests
 
 from app.asr.base import BaseASR
+from app.config import settings
+from app.diagnostics import describe_exception, metrics
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("stt.asr")
 
 HOST = "asr.tencentcloudapi.com"
 SERVICE = "asr"
@@ -100,7 +102,13 @@ class TencentASR(BaseASR):
         )
 
         resp = requests.post(
-            f"https://{HOST}", data=payload.encode("utf-8"), headers=headers, timeout=30
+            f"https://{HOST}",
+            data=payload.encode("utf-8"),
+            headers=headers,
+            timeout=(
+                max(2, int(settings.asr_connect_timeout)),
+                max(5, int(settings.asr_timeout)),
+            ),
         )
         resp.raise_for_status()
         data = resp.json().get("Response", {})
@@ -114,9 +122,33 @@ class TencentASR(BaseASR):
     async def recognize(self, pcm: bytes) -> str:
         if not self.secret_id or not self.secret_key:
             raise RuntimeError("未配置腾讯云 SecretId/SecretKey")
+        req = metrics.next_id()
+        duration = len(pcm) / (settings.sample_rate * 2)
+        logger.info(
+            "[ASR] req#%d → 腾讯云 SentenceRecognition | host=%s type=%s "
+            "audio=%.1fs/%dKB timeout=(connect %ds, read %ds)",
+            req, HOST, self.service_type, duration, len(pcm) // 1024,
+            max(2, int(settings.asr_connect_timeout)),
+            max(5, int(settings.asr_timeout)),
+        )
+        started = time.monotonic()
         try:
-            return await asyncio.to_thread(self._recognize_sync, pcm)
+            text = await asyncio.to_thread(self._recognize_sync, pcm)
         except Exception as e:
-            # 上抛给 main.py 统一做连续失败计数与熔断退避
-            logger.error("腾讯云 ASR 请求失败: %s", e)
+            latency = time.monotonic() - started
+            info = describe_exception(e, getattr(e, "response", None))
+            metrics.record(False, latency, info["code"], info["detail"], info["hint"], url=HOST)
+            logger.error(
+                "[ASR] req#%d ✗ %s after %.2fs | %s | 建议: %s",
+                req, info["code"], latency, info["detail"], info["hint"],
+            )
             raise
+        latency = time.monotonic() - started
+        metrics.record(
+            True, latency, slow=latency * 1000 > settings.asr_slow_ms, url=HOST
+        )
+        logger.info(
+            "[ASR] req#%d ✓ %.2fs text=%d字: %s",
+            req, latency, len(text), text[:80].replace("\n", " "),
+        )
+        return text

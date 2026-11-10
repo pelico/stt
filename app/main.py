@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -17,6 +18,7 @@ from app.config import settings
 from app.database import (
     init_db, save_transcript, list_transcripts, count_transcripts, iso_utc,
 )
+from app.diagnostics import metrics
 from app.logbuffer import BufferHandler, LogBuffer
 from app.pending_store import parse_iso_naive
 from app.rtsp_history import add_history, list_history, remove_history
@@ -36,6 +38,35 @@ log_buffer = LogBuffer(capacity=1000)
 _buffer_handler = BufferHandler(log_buffer)
 _buffer_handler.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
 logging.getLogger().addHandler(_buffer_handler)
+
+
+def _setup_file_logging():
+    """排查超时往往是事后，内存缓冲重启即清空，因此额外轮转落盘。"""
+    if not settings.log_file_enabled:
+        return
+    try:
+        path = settings.log_file_path
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        handler = RotatingFileHandler(
+            path,
+            maxBytes=max(1, int(settings.log_file_max_mb)) * 1024 * 1024,
+            backupCount=max(0, int(settings.log_file_backups)),
+            encoding="utf-8",
+        )
+        handler.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        logging.getLogger().addHandler(handler)
+        logger.info(
+            "运行日志已落盘: %s（单文件 %sMB × %s 份轮转）",
+            path, settings.log_file_max_mb, settings.log_file_backups,
+        )
+    except Exception as e:
+        logger.warning("运行日志落盘失败（不影响运行）: %s", e)
+
+
+_setup_file_logging()
 
 # 可选访问口令：空表示不启用（兼容原有部署）
 ACCESS_TOKEN = (settings.access_token or "").strip()
@@ -144,13 +175,23 @@ async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -
     补处理时用写入库，历史记录按「说话时间」而非「识别完成时间」排序。
     """
     global _asr_failures, _asr_blocked_until
+    started = time.monotonic()
     cfg = get_runtime()
     duration_sec = len(audio_data) / (settings.sample_rate * 2)
     captured_at = parse_iso_naive(wall_iso)
+    queue_lag = (
+        (datetime.now(timezone.utc).replace(tzinfo=None) - captured_at).total_seconds()
+        if captured_at else 0.0
+    )
+    backlog = _streamer.backlog if _streamer else 0
     if not asr_active(cfg):
         logger.debug("当前已暂停或不在识别时段，跳过 %.1f 秒语音", duration_sec)
         return True
-    logger.info("收到语音段: %.1f 秒", duration_sec)
+    logger.info(
+        "[段] 开始 | 音频 %.1fs/%dKB | 排队 %.1fs | 积压 %d | 引擎 %s | 模式 %s | 连续失败 %d",
+        duration_sec, len(audio_data) // 1024, queue_lag, backlog,
+        cfg.get("asr_engine"), _streamer.mode if _streamer else "-", _asr_failures,
+    )
 
     now = time.monotonic()
     if now < _asr_blocked_until:
@@ -163,7 +204,11 @@ async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -
         text = await get_asr(cfg).recognize(audio_data)
     except Exception as e:
         _asr_failures += 1
-        logger.error("ASR 识别失败（连续 %d 次）: %s", _asr_failures, e)
+        logger.error(
+            "[段] 失败 | 连续 %d/%d 次 | 耗时 %.2fs | 排队 %.1fs | 积压 %d | %s: %s",
+            _asr_failures, ASR_FAIL_THRESHOLD, time.monotonic() - started,
+            queue_lag, backlog, type(e).__name__, str(e)[:200],
+        )
         if _asr_failures >= ASR_FAIL_THRESHOLD:
             backoff = min(
                 ASR_BACKOFF_CAP,
@@ -191,14 +236,16 @@ async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -
             await _dump_rejected(audio_data, f"text-{reason}")
             return True
 
-    if captured_at is not None:
-        lag = (datetime.now(timezone.utc).replace(tzinfo=None) - captured_at).total_seconds()
-        if lag > 30:
-            logger.info("识别结果（延迟 %.0f 秒补处理）: %s", lag, text)
-        else:
-            logger.info("识别结果: %s", text)
-    else:
-        logger.info("识别结果: %s", text)
+    lag = (
+        (datetime.now(timezone.utc).replace(tzinfo=None) - captured_at).total_seconds()
+        if captured_at else 0.0
+    )
+    prefix = "（延迟 %.0f 秒补处理）" % lag if lag > 30 else ""
+    logger.info(
+        "[段] 结果%s | 耗时 %.2fs | 排队 %.1fs | 积压 %d | %s",
+        prefix, time.monotonic() - started, queue_lag, backlog,
+        text.replace("\n", " ")[:120],
+    )
 
     try:
         record = await asyncio.to_thread(
@@ -414,6 +461,11 @@ async def health():
         "stream_running": bool(_stream_task and not _stream_task.done()),
         "queue_mode": _streamer.mode if _streamer else None,
         "queue_backlog": _streamer.backlog if _streamer else 0,
+        "diagnostics": metrics.snapshot(),
+        "asr_timeout": settings.asr_timeout,
+        "asr_connect_timeout": settings.asr_connect_timeout,
+        "asr_slow_ms": settings.asr_slow_ms,
+        "log_file": settings.log_file_path if settings.log_file_enabled else None,
     }
 
 

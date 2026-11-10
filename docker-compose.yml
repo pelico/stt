@@ -19,6 +19,10 @@ services:
       # - QUEUE_MODE=realtime
       # - QUEUE_MAX_ITEMS=500
       # - QUEUE_MAX_MB=64
+      # 诊断：连接/读取超时分开、慢请求阈值；完整日志轮转落盘 ./data/logs/stt.log
+      # - ASR_CONNECT_TIMEOUT=10
+      # - ASR_SLOW_MS=10000
+      # - LOG_FILE_ENABLED=true
       # 被过滤音频留证（调试用）
       # - SAVE_REJECTED_AUDIO=true
       # - TENCENT_SECRET_ID=

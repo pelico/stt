@@ -113,12 +113,16 @@ class PendingStore:
             return count, dropped
         return self._run(_do)
 
-    def peek(self) -> Optional[Tuple[int, bytes, str, int]]:
-        """取最旧一条但不删除；处理成功后才由 delete() 出队。"""
+    def peek(self) -> Optional[Tuple[int, bytes, str, int, float]]:
+        """取最旧一条但不删除；处理成功后才由 delete() 出队。
+
+        第 5 项是该段已排队秒数，供日志显示「等待多久才轮到识别」。
+        """
         return self._run(
             lambda conn: conn.execute(
-                "SELECT id, pcm, wall_iso, attempts FROM pending "
-                "ORDER BY id LIMIT 1"
+                "SELECT id, pcm, wall_iso, attempts, ? - created_at FROM pending "
+                "ORDER BY id LIMIT 1",
+                (time.time(),),
             ).fetchone()
         )
 

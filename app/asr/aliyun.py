@@ -1,14 +1,17 @@
 """阿里云百炼实时语音识别。"""
 import logging
 import threading
+import time
 from typing import Optional
 
 import dashscope
 from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
 
 from app.asr.base import BaseASR
+from app.config import settings
+from app.diagnostics import describe_exception, metrics
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("stt.asr")
 
 
 class _Callback(RecognitionCallback):
@@ -73,24 +76,67 @@ class AliyunASR(BaseASR):
             **kwargs,
         )
 
+        req = metrics.next_id()
+        duration = len(pcm) / (settings.sample_rate * 2)
+        logger.info(
+            "[ASR] req#%d → 阿里云百炼 %s | audio=%.1fs/%dKB "
+            "timeout=(connect 5s, result 30s)",
+            req, self.model, duration, len(pcm) // 1024,
+        )
+        started = time.monotonic()
+        t_connected = t_sent = started
         try:
             rt.start()
             if not callback.opened.wait(timeout=5):
                 rt.stop()
-                raise RuntimeError("ASR 连接超时")
+                raise TimeoutError("连接阶段 5s 未建立会话")
+            t_connected = time.monotonic()
 
             chunk_size = self.sample_rate // 10 * 2  # 100ms
             for i in range(0, len(pcm), chunk_size):
                 rt.send_audio_frame(pcm[i : i + chunk_size])
             rt.stop()
+            t_sent = time.monotonic()
 
             if not callback.done.wait(timeout=30):
-                logger.warning("ASR 识别超时")
+                raise TimeoutError("结果等待 30s 未返回")
             if callback.error:
                 raise RuntimeError(f"ASR 错误: {callback.error}")
 
-            return callback.text.strip()
+            text = callback.text.strip()
+            latency = time.monotonic() - started
+            metrics.record(
+                True, latency, slow=latency * 1000 > settings.asr_slow_ms,
+                url="dashscope",
+            )
+            logger.info(
+                "[ASR] req#%d ✓ %.2fs (connect %.2fs, send %.2fs, wait %.2fs) "
+                "text=%d字: %s",
+                req, latency, t_connected - started, t_sent - t_connected,
+                time.monotonic() - t_sent, len(text), text[:80].replace("\n", " "),
+            )
+            return text
         except Exception as e:
-            # 上抛给 main.py 统一做连续失败计数与熔断退避
-            logger.error("ASR 会话异常: %s", e)
+            latency = time.monotonic() - started
+            info = describe_exception(e)
+            if isinstance(e, TimeoutError):
+                info["code"] = (
+                    "connect_timeout" if "连接" in str(e) else "read_timeout"
+                )
+                info["hint"] = (
+                    "连接阶段未建立：查网络与百炼服务状态"
+                    if info["code"] == "connect_timeout"
+                    else "结果等待超时：查百炼服务状态或调大等待时间"
+                )
+            metrics.record(
+                False, latency, info["code"], info["detail"], info["hint"],
+                url="dashscope",
+            )
+            logger.error(
+                "[ASR] req#%d ✗ %s after %.2fs (connect %.2fs, send %.2fs) | %s | 建议: %s",
+                req, info["code"], latency,
+                t_connected - started, max(0.0, t_sent - t_connected),
+                info["detail"], info["hint"],
+            )
+            # 超时也要上抛，否则会被当成「空结果」，既不重试也不熔断
             raise

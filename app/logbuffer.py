@@ -15,8 +15,10 @@ class LogBuffer:
         self._lock = threading.Lock()
 
     def add(self, record: logging.LogRecord) -> None:
+        # 带毫秒：识别请求与超时日志往往在同一秒内，秒级时间戳看不出先后
         entry = {
-            "time": datetime.fromtimestamp(record.created).strftime("%H:%M:%S"),
+            "time": datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+            + ".%03d" % int((record.created % 1) * 1000),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
