@@ -28,7 +28,11 @@ FIELD_TYPES: Dict[str, type] = {
     "vad_frame_ms": int,
     "vad_silence_frames": int,
     "vad_min_speech_frames": int,
+    "vad_min_speech_ratio": float,
     "vad_rms_dbfs": int,
+    "ffmpeg_highpass": int,
+    "filter_noise_text": bool,
+    "filter_ignore_words": str,
     "asr_enabled": bool,
     "asr_schedule_enabled": bool,
     "asr_start_time": str,
@@ -59,7 +63,11 @@ DEFAULTS: Dict[str, Any] = {
     "vad_frame_ms": settings.vad_frame_ms,
     "vad_silence_frames": settings.vad_silence_frames,
     "vad_min_speech_frames": settings.vad_min_speech_frames,
+    "vad_min_speech_ratio": settings.vad_min_speech_ratio,
     "vad_rms_dbfs": settings.vad_rms_dbfs,
+    "ffmpeg_highpass": settings.ffmpeg_highpass,
+    "filter_noise_text": settings.filter_noise_text,
+    "filter_ignore_words": settings.filter_ignore_words,
     "asr_enabled": settings.asr_enabled,
     "asr_schedule_enabled": settings.asr_schedule_enabled,
     "asr_start_time": settings.asr_start_time,
@@ -131,6 +139,11 @@ def _validate(key: str, value: Any) -> Any:
             value = int(value)
         except (TypeError, ValueError):
             raise ValueError(f"{key} 必须是整数")
+    if expected is float:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} 必须是数字")
     if expected is bool:
         value = _to_bool(value)
 
@@ -148,6 +161,12 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("vad_min_speech_frames 必须在 1-100")
     if key == "vad_rms_dbfs" and not (-80 <= value <= -10):
         raise ValueError("vad_rms_dbfs 必须在 -80 ~ -10")
+    if key == "vad_min_speech_ratio" and not (0 <= value <= 1):
+        raise ValueError("vad_min_speech_ratio 必须在 0 ~ 1")
+    if key == "ffmpeg_highpass" and not (0 <= value <= 8000):
+        raise ValueError("ffmpeg_highpass 必须在 0 ~ 8000")
+    if key == "filter_ignore_words" and len(str(value)) > 2000:
+        raise ValueError("filter_ignore_words 过长")
     if key == "asr_engine" and value not in ENGINES:
         raise ValueError(f"asr_engine 必须是 {'/'.join(ENGINES)}")
     if key == "asr_language" and value not in LANGUAGES:
@@ -177,6 +196,14 @@ class RuntimeConfig:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+            # 旧版默认 VAD 太松（最短语音 90ms / 断句 300ms），噪声片段大量进入识别。
+            # 仅在用户从未改过这两项（仍是旧默认值）时一次性升级，不覆盖自定义调参。
+            if "vad_min_speech_ratio" not in data:
+                if data.get("vad_min_speech_frames") == 3:
+                    data["vad_min_speech_frames"] = settings.vad_min_speech_frames
+                if data.get("vad_silence_frames") == 10:
+                    data["vad_silence_frames"] = settings.vad_silence_frames
+                logger.info("已将旧版 VAD 默认值升级为更严格的设置")
             for key, value in data.items():
                 if key in FIELD_TYPES:
                     try:

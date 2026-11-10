@@ -15,6 +15,7 @@ from app.database import init_db, save_transcript, list_transcripts, iso_utc
 from app.logbuffer import BufferHandler, LogBuffer
 from app.rtsp_history import add_history, list_history, remove_history
 from app.stream import AudioStreamer
+from app.text_filter import noise_reason
 from app.runtime_config import get_runtime, ENGINES, asr_active, in_schedule
 from app.asr import get_asr
 
@@ -79,6 +80,12 @@ async def on_speech_segment(audio_data: bytes):
     if not text:
         logger.debug("识别结果为空，跳过")
         return
+
+    if cfg.get("filter_noise_text", True):
+        reason = noise_reason(text, cfg.get("filter_ignore_words", ""))
+        if reason:
+            logger.info("丢弃噪音识别结果 (%s): %s", reason, text)
+            return
 
     logger.info("识别结果: %s", text)
 

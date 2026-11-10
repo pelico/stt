@@ -223,6 +223,7 @@ class AudioStreamer:
 
     async def _run_once(self):
         url = self.cfg.get("rtsp_url")
+        highpass = int(self.cfg.get("ffmpeg_highpass", 100))
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
@@ -232,6 +233,11 @@ class AudioStreamer:
             "-fflags", "+genpts",
             "-i", url,
             "-vn",
+        ]
+        if highpass > 0:
+            # 风声/风扇/电源嗡鸣等低频噪声常把 VAD 误触发，高通滤波成本极低
+            cmd += ["-af", f"highpass=f={highpass}"]
+        cmd += [
             "-acodec", "pcm_s16le",
             "-ar", str(self.sample_rate),
             "-ac", "1",
@@ -264,8 +270,9 @@ class AudioStreamer:
                 break
             frame_ms = int(self.cfg.get("vad_frame_ms", 30))
             frame_bytes = self.sample_rate * frame_ms // 1000 * 2
-            silence_limit = int(self.cfg.get("vad_silence_frames", 10))
-            min_speech = int(self.cfg.get("vad_min_speech_frames", 3))
+            silence_limit = int(self.cfg.get("vad_silence_frames", 20))
+            min_speech = int(self.cfg.get("vad_min_speech_frames", 10))
+            min_ratio = float(self.cfg.get("vad_min_speech_ratio", 0.5))
             rms_limit = float(self.cfg.get("vad_rms_dbfs", -45))
 
             data = await proc.stdout.read(frame_bytes)
@@ -305,14 +312,21 @@ class AudioStreamer:
                         duration_ms = int(
                             len(speech_buffer) / (self.sample_rate * 2) * 1000
                         )
-                        if speech_frames >= min_speech:
+                        # 噪声片段往往只有零星几帧被判为语音，其余全是静音尾。
+                        # 要求"真语音帧"占比达标，比单纯看帧数更能挡住短促杂音。
+                        total_frames = speech_frames + silence_count
+                        ratio = speech_frames / max(1, total_frames)
+                        if speech_frames >= min_speech and ratio >= min_ratio:
                             self._segments += 1
                             self._last_duration_ms = duration_ms
                             logger.info("语音段结束: %.1f 秒", duration_ms / 1000)
                             self._enqueue(speech_buffer)
                         else:
                             self._dropped += 1
-                            logger.debug("丢弃过短语音段: %d ms", duration_ms)
+                            logger.debug(
+                                "丢弃疑似噪声段: %d ms, 语音帧 %d/%d (%.0f%%)",
+                                duration_ms, speech_frames, total_frames, ratio * 100,
+                            )
                         in_speech = False
                         speech_buffer = b""
                         silence_count = 0

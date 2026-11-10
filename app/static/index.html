@@ -371,7 +371,7 @@
   <span id="engine-tag" class="status">引擎: -</span>
   <button class="icon-btn" id="asr-toggle" title="识别总开关">🟢 识别中</button>
   <div class="spacer"></div>
-  <button class="icon-btn" id="listen-btn" title="实时收听摄像头声音">🔊 监听</button>
+  <button class="icon-btn" id="listen-btn" title="实时播放摄像头声音">▶ 播放</button>
   <button class="icon-btn" id="open-logs" title="查看容器运行日志">📜 日志</button>
   <button class="icon-btn" id="open-settings">⚙ 设置</button>
 </header>
@@ -512,7 +512,7 @@
         <label>结束时间</label>
         <input type="time" id="asr_end_time" />
       </div>
-      <div class="hint">按容器本地时间（TZ 环境变量），跨午夜可设 22:00–06:00；起止相同表示全天。时段外会断开拉流，摄像头不再被拉取，进入时段自动重连（约 2 秒）。顶部识别开关只影响识别，不影响拉流和监听。</div>
+      <div class="hint">按容器本地时间（TZ 环境变量），跨午夜可设 22:00–06:00；起止相同表示全天。时段外会断开拉流，摄像头不再被拉取，进入时段自动重连（约 2 秒）。顶部识别开关只影响识别，不影响拉流和播放。</div>
     </div>
 
     <div class="group">
@@ -542,11 +542,30 @@
         <div class="hint">静音持续多久认为一句话结束。调小断句快，调大句子更完整。</div>
       </div>
       <div class="field">
-        <label>最短语音 <span class="value-tag" id="min_speech_ms_val">90 ms</span></label>
+        <label>最短语音 <span class="value-tag" id="min_speech_ms_val">300 ms</span></label>
         <input type="range" id="vad_min_speech_frames" min="1" max="30" step="1" />
         <div class="hint">低于此时长的声音会被忽略，可过滤咳嗽、开关门等短噪声。</div>
       </div>
+      <div class="field">
+        <label>有效语音占比 <span class="value-tag" id="ratio_val">50 %</span></label>
+        <input type="range" id="vad_min_speech_ratio" min="0" max="100" step="5" />
+        <div class="hint">一段音频里"真语音帧"的最低占比。噪声往往只有零星几帧被判为语音，调到 50% 以上能明显减少空识别；设 0 关闭此项。</div>
+      </div>
       <div class="hint">这些参数保存后立即生效，无需重启容器。</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">噪音结果过滤</div>
+      <label class="check-row">
+        <input type="checkbox" id="filter_noise_text" />
+        丢弃语气词、单字与幻觉短词
+      </label>
+      <div class="field">
+        <label>噪音词黑名单（逗号分隔）</label>
+        <input type="text" id="filter_ignore_words" placeholder="嗯,啊,here,shoes" />
+        <div class="hint">识别结果（忽略标点、不分大小写）完全等于其中任一词时丢弃。已内置常见语气词与幻觉词，这里补现场特有的杂音词即可。</div>
+      </div>
+      <div class="hint">模型对纯噪声会"编"出文字（嗯、啊、四、Here.）。此开关只影响入库与推送，不影响拉流；关闭后记录全部原始结果。</div>
     </div>
   </div>
   <div class="drawer-foot">
@@ -628,7 +647,7 @@ function toggleListen() {
   listenWanted = !listenWanted;
   if (listenWanted) initAudio();
   listenBtn.classList.toggle('active', listenWanted);
-  listenBtn.textContent = listenWanted ? '🔇 停止监听' : '🔊 监听';
+  listenBtn.textContent = listenWanted ? '⏹ 停止播放' : '▶ 播放';
   sendListenState();
 }
 
@@ -654,7 +673,7 @@ function connectWS() {
   };
   ws.onclose = () => {
     setStatus(false);
-    if (listenWanted) showToast('连接断开，重连后继续监听', true);
+    if (listenWanted) showToast('连接断开，重连后继续播放', true);
     setTimeout(connectWS, 3000);
   };
   ws.onerror = () => setStatus(false);
@@ -785,7 +804,7 @@ async function toggleAsr() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || '切换失败');
     renderAsrState({ asr_enabled: data.values.asr_enabled, asr_active: data.asr_active });
-    showToast(next ? '识别已开启' : '识别已暂停（仍可监听和看状态）');
+    showToast(next ? '识别已开启' : '识别已暂停（仍可播放和看状态）');
   } catch (e) {
     showToast(e.message, true);
   }
@@ -808,6 +827,7 @@ function syncVadLabels() {
   const minSpeech = parseInt(document.getElementById('vad_min_speech_frames').value, 10);
   document.getElementById('silence_ms_val').textContent = (silenceFrames * frameMs) + ' ms';
   document.getElementById('min_speech_ms_val').textContent = (minSpeech * frameMs) + ' ms';
+  document.getElementById('ratio_val').textContent = document.getElementById('vad_min_speech_ratio').value + ' %';
 }
 
 async function loadRtspHistory() {
@@ -873,6 +893,9 @@ async function loadSettings() {
   document.getElementById('vad_frame_ms').value = v.vad_frame_ms;
   document.getElementById('vad_silence_frames').value = v.vad_silence_frames;
   document.getElementById('vad_min_speech_frames').value = v.vad_min_speech_frames;
+  document.getElementById('vad_min_speech_ratio').value = Math.round((v.vad_min_speech_ratio ?? 0.5) * 100);
+  document.getElementById('filter_noise_text').checked = v.filter_noise_text ?? true;
+  document.getElementById('filter_ignore_words').value = v.filter_ignore_words ?? '';
   syncVadLabels();
 
   document.getElementById('asr_schedule_enabled').checked = !!v.asr_schedule_enabled;
@@ -898,6 +921,9 @@ async function saveSettings() {
     vad_frame_ms: parseInt(document.getElementById('vad_frame_ms').value, 10),
     vad_silence_frames: parseInt(document.getElementById('vad_silence_frames').value, 10),
     vad_min_speech_frames: parseInt(document.getElementById('vad_min_speech_frames').value, 10),
+    vad_min_speech_ratio: parseInt(document.getElementById('vad_min_speech_ratio').value, 10) / 100,
+    filter_noise_text: document.getElementById('filter_noise_text').checked,
+    filter_ignore_words: document.getElementById('filter_ignore_words').value.trim(),
     asr_schedule_enabled: document.getElementById('asr_schedule_enabled').checked,
     asr_start_time: document.getElementById('asr_start_time').value,
     asr_end_time: document.getElementById('asr_end_time').value,
@@ -1032,7 +1058,7 @@ document.getElementById('cancel-settings').addEventListener('click', closeDrawer
 drawerMask.addEventListener('click', closeDrawer);
 document.getElementById('save-settings').addEventListener('click', saveSettings);
 document.getElementById('asr_engine').addEventListener('change', (e) => applyEnginePanels(e.target.value));
-['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames'].forEach(id => {
+['vad_mode', 'vad_rms_dbfs', 'vad_frame_ms', 'vad_silence_frames', 'vad_min_speech_frames', 'vad_min_speech_ratio'].forEach(id => {
   document.getElementById(id).addEventListener('input', syncVadLabels);
 });
 document.addEventListener('keydown', (e) => {

@@ -42,14 +42,28 @@ class Settings(BaseSettings):
     # VAD 帧长（毫秒），webrtcvad 只支持 10/20/30
     vad_frame_ms: int = 30
 
-    # 连续静音多少帧后认为一句话结束
-    vad_silence_frames: int = 10
+    # 连续静音多少帧后认为一句话结束（默认 20 帧=600ms，避免把一句话切碎）
+    vad_silence_frames: int = 20
 
-    # 连续语音多少帧后才认为是有效语音（过滤短促噪声）
-    vad_min_speech_frames: int = 3
+    # 连续语音多少帧后才认为是有效语音（默认 10 帧=300ms，过滤短促噪声）
+    vad_min_speech_frames: int = 10
+
+    # 一段语音里"真语音帧"的最低占比：噪声往往只有零星几帧被 VAD 判为语音
+    vad_min_speech_ratio: float = 0.5
 
     # 能量门限（dBFS）：低于该音量的帧不判定为语音，-80 ~ -10
     vad_rms_dbfs: int = -45
+
+    # ffmpeg 高通滤波截止频率（Hz），滤掉风声/风扇等低频噪声；0 表示关闭
+    ffmpeg_highpass: int = 100
+
+    # 识别结果噪音过滤：语气词、单字、幻觉短词直接丢弃
+    filter_noise_text: bool = True
+    filter_ignore_words: str = (
+        "嗯,啊,哦,呃,唉,哎,呵,哈,嘿,唔,噢,喂,呀,呐,呗,嘛,额,"
+        "嗯嗯,啊啊,呵呵,哈哈,呵呵呵,不不不,四,三,二,一,"
+        "here,shoes,foot,eye,i love you,thank you,thanks,bye,okay"
+    )
 
     # 识别总开关
     asr_enabled: bool = True
