@@ -14,6 +14,8 @@ from typing import Callable, Optional
 import webrtcvad
 
 from app.config import settings
+from app.pending_store import PendingStore, utc_iso_naive
+from app.runtime_config import asr_active
 
 try:  # Python <= 3.12 自带；3.13+ 已移除，用纯 Python 兜底
     import audioop
@@ -77,6 +79,17 @@ class AudioStreamer:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=20)
         self._worker: Optional[asyncio.Task] = None
 
+        # 「完整优先」模式：磁盘 FIFO 队列。ASR 慢时片段落盘、后台按采集
+        # 顺序补识别，不按等待时间丢弃；容器重启后未处理片段仍在。
+        self._mode = str(self.cfg.get("queue_mode", settings.queue_mode))
+        if self._mode not in ("durable", "realtime"):
+            self._mode = "durable"
+        self._store: Optional[PendingStore] = (
+            PendingStore() if self._mode == "durable" else None
+        )
+        self._wakeup = asyncio.Event()
+        self._backlog = self._store.count() if self._store else 0
+
         # 调试统计
         self._segments = 0
         self._dropped = 0
@@ -102,6 +115,8 @@ class AudioStreamer:
             "dropped": self._dropped,
             "last_duration_ms": self._last_duration_ms,
             "queued": self._queue.qsize(),
+            "backlog": self._backlog,
+            "mode": self._mode,
             "stale": self._stale_dropped,
         }
 
@@ -109,6 +124,16 @@ class AudioStreamer:
     def paused(self) -> bool:
         """时段外挂起中（未拉流）。"""
         return self._paused
+
+    @property
+    def mode(self) -> str:
+        """当前识别队列模式：durable / realtime（启动时确定）。"""
+        return self._mode
+
+    @property
+    def backlog(self) -> int:
+        """待识别积压条数。"""
+        return self._backlog
 
     def restart(self):
         """立即中断当前拉流，用新配置重连。"""
@@ -131,12 +156,64 @@ class AudioStreamer:
             self._worker = None
 
     async def _consume(self):
-        """后台串行识别，不阻塞音频读取。
+        """后台串行识别，不阻塞音频读取。按 queue_mode 选择后端。"""
+        if self._mode == "durable":
+            await self._consume_durable()
+        else:
+            await self._consume_realtime()
 
-        队列项带入队时刻：识别服务慢时，排队超过阈值的片段直接丢弃。
-        否则单 worker 会把几十秒前的语音一段段慢慢补识别，队列越堆越深，
-        前端拿到的全是过期文字，且每段都要白等一次超时。
+    async def _consume_durable(self):
+        """完整优先：从磁盘 FIFO 取最旧一条，识别成功才出队。
+
+        ASR 慢时表现为「延迟入库」而不是丢数据：说话是间歇的，安静下来后
+        后台会把积压按采集顺序补完，结果时间戳仍是说话时刻。
         """
+        store = self._store
+        while True:
+            # 暂停/时段外：保留积压，等恢复后继续补完，不消耗重试次数
+            if not asr_active(self.cfg):
+                self._backlog = await asyncio.to_thread(store.count)
+                await asyncio.sleep(2)
+                continue
+            item = await asyncio.to_thread(store.peek)
+            if item is None:
+                self._backlog = 0
+                self._wakeup.clear()
+                # clear 后再查一次，避免「入队发生在 clear 之前」导致漏唤醒
+                if await asyncio.to_thread(store.count) == 0:
+                    await self._wakeup.wait()
+                continue
+            row_id, pcm, wall_iso, attempts = item
+            try:
+                done = await self.on_speech_segment(pcm, wall_iso)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("识别任务异常: %s", e)
+                done = False
+
+            if done:
+                await asyncio.to_thread(store.delete, row_id)
+            else:
+                try:
+                    max_attempts = int(
+                        self.cfg.get(
+                            "queue_max_attempts", settings.queue_max_attempts
+                        )
+                    )
+                except (TypeError, ValueError):
+                    max_attempts = settings.queue_max_attempts
+                removed = await asyncio.to_thread(store.bump, row_id, max_attempts)
+                if removed:
+                    logger.warning(
+                        "语音段连续 %d 次识别失败，已丢弃以免卡住队列", attempts + 1
+                    )
+                # 失败退避，配合 main.py 的熔断，服务端故障期间不空转刷请求
+                await asyncio.sleep(min(30, 2 ** min(attempts, 4)))
+            self._backlog = await asyncio.to_thread(store.count)
+
+    async def _consume_realtime(self):
+        """实时优先：内存队列，排队超过阈值的片段直接丢弃。"""
         while True:
             created_at, segment = await self._queue.get()
             try:
@@ -155,9 +232,8 @@ class AudioStreamer:
                     if now - self._last_stale_log >= 10:
                         self._last_stale_log = now
                         logger.warning(
-                            "识别服务跟不上：丢弃 %.0f 秒前的语音段（累计 %d 段，"
-                            "队列仍有 %d 段）。请检查 ASR 服务端耗时，"
-                            "或调大「队列最长等待」",
+                            "实时模式：丢弃 %.0f 秒前的语音段（累计 %d 段，"
+                            "队列仍有 %d 段）。要保留全部结果请切到「完整优先」",
                             age, self._stale_dropped, self._queue.qsize(),
                         )
                     continue
@@ -169,8 +245,31 @@ class AudioStreamer:
             finally:
                 self._queue.task_done()
 
-    def _enqueue(self, segment: bytes):
-        """入队；队列满时丢弃最旧的任务，保证实时性。"""
+    async def _enqueue(self, segment: bytes):
+        """VAD 切出一段语音后入队。"""
+        if self._mode == "durable":
+            try:
+                backlog, dropped = await asyncio.to_thread(
+                    self._store.put,
+                    segment,
+                    utc_iso_naive(),
+                    int(self.cfg.get("queue_max_items", settings.queue_max_items)),
+                    int(self.cfg.get("queue_max_mb", settings.queue_max_mb)),
+                )
+            except Exception as e:
+                logger.error("待识别队列落盘失败，该段已丢失: %s", e)
+                return
+            self._backlog = backlog
+            if dropped:
+                logger.warning(
+                    "待识别队列已达上限，丢弃最旧 %d 段（当前积压 %d 段）；"
+                    "ASR 长期跟不上产出速度，请排查服务端推理耗时",
+                    dropped, backlog,
+                )
+            self._wakeup.set()
+            return
+
+        # 实时优先：纯内存有界队列，满则丢最旧
         if self._queue.full():
             try:
                 self._queue.get_nowait()
@@ -422,7 +521,7 @@ class AudioStreamer:
                             self._segments += 1
                             self._last_duration_ms = duration_ms
                             logger.info("语音段结束: %.1f 秒", duration_ms / 1000)
-                            self._enqueue(speech_buffer)
+                            await self._enqueue(speech_buffer)
                         else:
                             self._dropped += 1
                             logger.debug(

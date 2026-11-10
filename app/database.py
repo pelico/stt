@@ -70,8 +70,13 @@ def save_transcript(
     duration_sec: int = 0,
     audio_path: Optional[str] = None,
     engine: str = "aliyun",
+    timestamp: Optional[datetime] = None,
 ) -> Transcript:
-    """保存一条识别结果。"""
+    """保存一条识别结果。
+
+    timestamp 传采集时刻：完整优先模式下片段可能排队很久才识别完，
+    历史记录必须按「说话时间」而不是「识别完成时间」排序。
+    """
     db = SessionLocal()
     try:
         record = Transcript(
@@ -79,6 +84,7 @@ def save_transcript(
             duration_sec=duration_sec,
             audio_path=audio_path,
             engine=engine,
+            timestamp=timestamp or datetime.utcnow(),
         )
         db.add(record)
         db.commit()

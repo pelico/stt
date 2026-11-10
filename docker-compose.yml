@@ -14,6 +14,11 @@ services:
       - DASHSCOPE_API_KEY=your_api_key_here
       # 可选访问口令：设置后用 ?token=xxx 打开一次页面即可
       # - ACCESS_TOKEN=change-me
+      # 识别队列：默认「完整优先」，语音段落盘 ./data/pending.db，ASR 慢时后台补识别不丢数据
+      # 要低延迟（宁可丢旧片段）改成 realtime；切换后需重启容器
+      # - QUEUE_MODE=realtime
+      # - QUEUE_MAX_ITEMS=500
+      # - QUEUE_MAX_MB=64
       # 被过滤音频留证（调试用）
       # - SAVE_REJECTED_AUDIO=true
       # - TENCENT_SECRET_ID=

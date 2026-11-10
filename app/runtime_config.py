@@ -35,6 +35,10 @@ FIELD_TYPES: Dict[str, type] = {
     "ffmpeg_highpass": int,
     "ffmpeg_timeout": int,
     "asr_max_queue_age": int,
+    "queue_mode": str,
+    "queue_max_items": int,
+    "queue_max_mb": int,
+    "queue_max_attempts": int,
     "filter_noise_text": bool,
     "filter_ignore_words": str,
     "save_rejected_audio": bool,
@@ -75,6 +79,10 @@ DEFAULTS: Dict[str, Any] = {
     "ffmpeg_highpass": settings.ffmpeg_highpass,
     "ffmpeg_timeout": settings.ffmpeg_timeout,
     "asr_max_queue_age": settings.asr_max_queue_age,
+    "queue_mode": settings.queue_mode,
+    "queue_max_items": settings.queue_max_items,
+    "queue_max_mb": settings.queue_max_mb,
+    "queue_max_attempts": settings.queue_max_attempts,
     "filter_noise_text": settings.filter_noise_text,
     "filter_ignore_words": settings.filter_ignore_words,
     "save_rejected_audio": settings.save_rejected_audio,
@@ -183,6 +191,14 @@ def _validate(key: str, value: Any) -> Any:
         raise ValueError("ffmpeg_timeout 必须在 5 ~ 120")
     if key == "asr_max_queue_age" and not (0 <= value <= 300):
         raise ValueError("asr_max_queue_age 必须在 0 ~ 300（0 = 不限制）")
+    if key == "queue_mode" and value not in ("durable", "realtime"):
+        raise ValueError("queue_mode 必须是 durable 或 realtime")
+    if key == "queue_max_items" and not (10 <= value <= 10000):
+        raise ValueError("queue_max_items 必须在 10 ~ 10000")
+    if key == "queue_max_mb" and not (1 <= value <= 1024):
+        raise ValueError("queue_max_mb 必须在 1 ~ 1024")
+    if key == "queue_max_attempts" and not (0 <= value <= 100):
+        raise ValueError("queue_max_attempts 必须在 0 ~ 100（0 = 无限重试）")
     if key == "filter_ignore_words" and len(str(value)) > 2000:
         raise ValueError("filter_ignore_words 过长")
     if key == "asr_engine" and value not in ENGINES:

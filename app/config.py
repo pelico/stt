@@ -33,9 +33,22 @@ class Settings(BaseSettings):
     # OpenAI 兼容接口单次识别超时（秒）
     asr_timeout: int = 45
 
-    # 语音段在识别队列里允许等待的最长秒数。ASR 服务跟不上时，排队过久的
-    # 片段直接丢弃：几十秒后才转写出来的文字没有实时意义，却会持续占住
-    # 串行 worker，让积压越滚越大。0 = 不限制。Web 设置页可热更新。
+    # 识别队列模式（默认「完整优先」）：
+    #   durable  片段落盘到 /data/pending.db，按采集顺序 FIFO 慢慢补识别，
+    #            容器重启不丢；只有超过条数/容量上限或单条反复失败才丢。
+    #            ASR 慢时表现为「延迟入库」，结果时间戳仍是说话时刻。
+    #   realtime 纯内存队列，排队超过 asr_max_queue_age 秒即丢，保证低延迟。
+    queue_mode: str = "durable"
+
+    # 完整优先模式的磁盘队列上限（条数 / MB），超出丢最旧并打日志
+    queue_max_items: int = 500
+    queue_max_mb: int = 64
+
+    # 单条片段最多尝试识别几次（防止坏音频把 FIFO 永久卡死）；0 = 无限重试
+    queue_max_attempts: int = 5
+
+    # 实时优先模式下，语音段在内存队列里允许等待的最长秒数；0 = 不限制。
+    # 仅在 queue_mode=realtime 时生效。Web 设置页可热更新。
     asr_max_queue_age: int = 10
 
     # 采样率（固定 16kHz，ASR 要求）

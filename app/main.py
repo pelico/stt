@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
@@ -17,6 +18,7 @@ from app.database import (
     init_db, save_transcript, list_transcripts, count_transcripts, iso_utc,
 )
 from app.logbuffer import BufferHandler, LogBuffer
+from app.pending_store import parse_iso_naive
 from app.rtsp_history import add_history, list_history, remove_history
 from app.stream import AudioStreamer
 from app.text_filter import noise_reason
@@ -134,14 +136,20 @@ async def _dump_rejected(pcm: bytes, reason: str):
         _dump_running -= 1
 
 
-async def on_speech_segment(audio_data: bytes):
-    """收到一段语音后的处理：识别 -> 存库 -> 推送前端。"""
+async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -> bool:
+    """收到一段语音后的处理：识别 -> 存库 -> 推送前端。
+
+    返回 True 表示该段已完成、可从待识别队列出队；False 表示识别失败，
+    调用方应保留该段稍后重试（完整优先模式）。wall_iso 是采集时刻，
+    补处理时用写入库，历史记录按「说话时间」而非「识别完成时间」排序。
+    """
     global _asr_failures, _asr_blocked_until
     cfg = get_runtime()
     duration_sec = len(audio_data) / (settings.sample_rate * 2)
+    captured_at = parse_iso_naive(wall_iso)
     if not asr_active(cfg):
         logger.debug("当前已暂停或不在识别时段，跳过 %.1f 秒语音", duration_sec)
-        return
+        return True
     logger.info("收到语音段: %.1f 秒", duration_sec)
 
     now = time.monotonic()
@@ -149,7 +157,7 @@ async def on_speech_segment(audio_data: bytes):
         logger.debug(
             "识别服务熔断中，%.0f 秒后重试", _asr_blocked_until - now
         )
-        return
+        return False
 
     try:
         text = await get_asr(cfg).recognize(audio_data)
@@ -164,7 +172,7 @@ async def on_speech_segment(audio_data: bytes):
             _asr_blocked_until = time.monotonic() + backoff
             logger.warning("识别服务连续失败，熔断 %d 秒后探活", backoff)
             _broadcast({"type": "asr_state", "blocked": True, "retry_in": backoff})
-        return
+        return False
 
     if _asr_failures:
         _asr_failures = 0
@@ -174,16 +182,23 @@ async def on_speech_segment(audio_data: bytes):
 
     if not text:
         logger.debug("识别结果为空，跳过")
-        return
+        return True
 
     if cfg.get("filter_noise_text", True):
         reason = noise_reason(text, cfg.get("filter_ignore_words", ""))
         if reason:
             logger.info("丢弃噪音识别结果 (%s): %s", reason, text)
             await _dump_rejected(audio_data, f"text-{reason}")
-            return
+            return True
 
-    logger.info("识别结果: %s", text)
+    if captured_at is not None:
+        lag = (datetime.now(timezone.utc).replace(tzinfo=None) - captured_at).total_seconds()
+        if lag > 30:
+            logger.info("识别结果（延迟 %.0f 秒补处理）: %s", lag, text)
+        else:
+            logger.info("识别结果: %s", text)
+    else:
+        logger.info("识别结果: %s", text)
 
     try:
         record = await asyncio.to_thread(
@@ -191,6 +206,7 @@ async def on_speech_segment(audio_data: bytes):
             text=text,
             duration_sec=int(duration_sec),
             engine=cfg.get("asr_engine"),
+            timestamp=captured_at,
         )
     except Exception as e:
         logger.error("保存数据库失败: %s", e)
@@ -199,11 +215,12 @@ async def on_speech_segment(audio_data: bytes):
     message = {
         "type": "transcript",
         "text": text,
-        "timestamp": iso_utc(record.timestamp) if record else None,
+        "timestamp": iso_utc(record.timestamp) if record else iso_utc(captured_at),
         "duration_sec": int(duration_sec),
         "id": record.id if record else None,
     }
     _broadcast(message)
+    return True
 
 
 async def on_vad_state(state: dict):
@@ -233,6 +250,11 @@ def _on_config_change(changed: List[str]):
     if "rtsp_url" in changed and _streamer is not None:
         logger.info("RTSP 地址已变更，重启拉流")
         _streamer.restart()
+    if "queue_mode" in changed:
+        logger.warning(
+            "识别队列模式已改为 %s，需重启容器后生效",
+            get_runtime().get("queue_mode"),
+        )
 
 
 @asynccontextmanager
@@ -390,6 +412,8 @@ async def health():
         "asr_blocked": time.monotonic() < _asr_blocked_until,
         "stream_paused": bool(_streamer and _streamer.paused),
         "stream_running": bool(_stream_task and not _stream_task.done()),
+        "queue_mode": _streamer.mode if _streamer else None,
+        "queue_backlog": _streamer.backlog if _streamer else 0,
     }
 
 
