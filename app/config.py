@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # 单条片段最多尝试识别几次（防止坏音频把 FIFO 永久卡死）；0 = 无限重试
     queue_max_attempts: int = 5
 
+    # 消费端相邻段合并：采集间隔小于该秒数的相邻语音段合并成一次识别请求，
+    # 摊薄每请求约 2 秒的固定开销（CF 两跳 + WAV 封装 + 服务端排队），
+    # 吞吐约翻 2~3 倍，连续对话滞后明显下降；上下文变长断句也更准。0 = 关闭
+    asr_merge_gap_sec: float = 1.0
+
+    # 合并块的最大音频时长（秒）：防止单个请求过大拖慢单次推理
+    asr_merge_max_sec: int = 30
+
     # 实时优先模式下，语音段在内存队列里允许等待的最长秒数；0 = 不限制。
     # 仅在 queue_mode=realtime 时生效。Web 设置页可热更新。
     asr_max_queue_age: int = 10
@@ -93,6 +101,10 @@ class Settings(BaseSettings):
 
     # ffmpeg 高通滤波截止频率（Hz），滤掉风声/风扇等低频噪声；0 表示关闭
     ffmpeg_highpass: int = 100
+
+    # ffmpeg 轻度降噪（afftdn 自适应）：对稳态人声/风扇底噪/轻微电流声有帮助，
+    # 对强 BGM 广告作用有限。老版本 ffmpeg 无此滤镜时自动降级关闭
+    ffmpeg_denoise: bool = True
 
     # 识别结果噪音过滤：语气词、单字、幻觉短词直接丢弃
     filter_noise_text: bool = True

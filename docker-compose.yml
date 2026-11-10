@@ -19,6 +19,11 @@ services:
       # - QUEUE_MODE=realtime
       # - QUEUE_MAX_ITEMS=2000
       # - QUEUE_MAX_MB=256
+      # 段合并：相邻段（间隔 <1s）合并成一次识别请求，摊薄固定开销，吞吐翻 2~3 倍
+      # - ASR_MERGE_GAP_SEC=1.0
+      # - ASR_MERGE_MAX_SEC=30
+      # ffmpeg 轻度降噪（afftdn），老 ffmpeg 无该滤镜时自动关闭
+      # - FFMPEG_DENOISE=1
       # 诊断：连接/读取超时分开、慢请求阈值；完整日志轮转落盘 ./data/logs/stt.log
       # - ASR_CONNECT_TIMEOUT=10
       # - ASR_SLOW_MS=10000

@@ -126,6 +126,62 @@ class PendingStore:
             ).fetchone()
         )
 
+    def peek_batch(self, max_items: int, max_bytes: int) -> list:
+        """按 FIFO 取最旧的一批段，供消费端合并成一次识别请求。
+
+        只按条数与总字节数截断（单条超长也会整条返回）；
+        「相邻间隔是否够近」由调用方结合 created_at 与段时长判断。
+        返回 [(id, pcm, wall_iso, attempts, created_at, size), ...]。
+        """
+        def _do(conn):
+            rows = conn.execute(
+                "SELECT id, pcm, wall_iso, attempts, created_at, size "
+                "FROM pending ORDER BY id LIMIT ?",
+                (max(1, int(max_items)),),
+            ).fetchall()
+            out, total = [], 0
+            for row in rows:
+                if out and total + row[5] > max_bytes:
+                    break
+                out.append(row)
+                total += row[5]
+            return out
+        return self._run(_do)
+
+    def delete_many(self, ids) -> None:
+        """批量出队：合并识别成功后一次性删除。"""
+        ids = list(ids)
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
+        self._run(
+            lambda conn: conn.execute(
+                f"DELETE FROM pending WHERE id IN ({placeholders})", ids
+            )
+        )
+
+    def bump_many(self, ids, max_attempts: int) -> int:
+        """识别失败：一批各计数 +1，达到上限的丢弃。返回丢弃条数。"""
+        def _do(conn):
+            removed = 0
+            for row_id in ids:
+                row = conn.execute(
+                    "SELECT attempts FROM pending WHERE id = ?", (row_id,)
+                ).fetchone()
+                if row is None:
+                    continue
+                attempts = row[0] + 1
+                if max_attempts > 0 and attempts >= max_attempts:
+                    conn.execute("DELETE FROM pending WHERE id = ?", (row_id,))
+                    removed += 1
+                else:
+                    conn.execute(
+                        "UPDATE pending SET attempts = ? WHERE id = ?",
+                        (attempts, row_id),
+                    )
+            return removed
+        return self._run(_do)
+
     def delete(self, row_id: int):
         self._run(lambda conn: conn.execute("DELETE FROM pending WHERE id = ?", (row_id,)))
 

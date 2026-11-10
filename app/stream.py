@@ -116,6 +116,8 @@ class AudioStreamer:
         # 打不开。首次报错后自动去掉对应参数并快速重连，只损失该参数的功能。
         self._rw_timeout_ok = True
         self._wallclock_ok = True
+        # 轻度降噪滤镜（afftdn）：老版本 ffmpeg 没有该滤镜时自动关闭
+        self._afftdn_ok = True
         self._fallback_changed = False
         # 每次拉流最多降级一个选项：同一次 stderr 里连续多行
         # "Option not found" 不应把还没试过的选项也去掉
@@ -210,10 +212,12 @@ class AudioStreamer:
             await self._consume_realtime()
 
     async def _consume_durable(self):
-        """完整优先：从磁盘 FIFO 取最旧一条，识别成功才出队。
+        """完整优先：从磁盘 FIFO 取最旧一批，识别成功才出队。
 
         ASR 慢时表现为「延迟入库」而不是丢数据：说话是间歇的，安静下来后
         后台会把积压按采集顺序补完，结果时间戳仍是说话时刻。
+        相邻（间隔 <= asr_merge_gap_sec）的段会合并成一次识别请求：
+        每个请求约 2 秒固定开销，合并后摊薄到几段里，吞吐翻 2~3 倍。
         """
         store = self._store
         while True:
@@ -224,8 +228,8 @@ class AudioStreamer:
                 )
                 await asyncio.sleep(2)
                 continue
-            item = await asyncio.to_thread(store.peek)
-            if item is None:
+            batch = await self._peek_merge_batch()
+            if not batch:
                 self._backlog = 0
                 self._backlog_bytes = 0
                 self._wakeup.clear()
@@ -239,10 +243,15 @@ class AudioStreamer:
                             logger.info("[队列] 已清空，回收 pending.db 磁盘空间")
                     await self._wakeup.wait()
                 continue
-            row_id, pcm, wall_iso, attempts, queued_sec = item
+            ids = [row[0] for row in batch]
+            pcm = b"".join(row[1] for row in batch)
+            wall_iso = batch[0][2]
+            attempts = min(row[3] for row in batch)
+            queued_sec = max(0.0, time.time() - batch[0][4])
+            merged_log = "" if len(batch) == 1 else f"（合并 {len(batch)} 段）"
             logger.info(
-                "[队列] 出队 | 等待 %.1fs | 积压 %d | 第 %d 次尝试 | 模式 %s",
-                max(0.0, queued_sec), self._backlog, attempts + 1, self._mode,
+                "[队列] 出队%s | 等待 %.1fs | 积压 %d | 第 %d 次尝试 | 模式 %s",
+                merged_log, queued_sec, self._backlog, attempts + 1, self._mode,
             )
             try:
                 done = await self.on_speech_segment(pcm, wall_iso)
@@ -253,8 +262,8 @@ class AudioStreamer:
                 done = False
 
             if done:
-                self._done_total += 1
-                await asyncio.to_thread(store.delete, row_id)
+                self._done_total += len(batch)
+                await asyncio.to_thread(store.delete_many, ids)
             else:
                 try:
                     max_attempts = int(
@@ -264,18 +273,20 @@ class AudioStreamer:
                     )
                 except (TypeError, ValueError):
                     max_attempts = settings.queue_max_attempts
-                removed = await asyncio.to_thread(store.bump, row_id, max_attempts)
+                removed = await asyncio.to_thread(
+                    store.bump_many, ids, max_attempts
+                )
+                self._fail_total += removed
                 backoff = min(30, 2 ** min(attempts, 4))
                 if removed:
-                    self._fail_total += 1
                     logger.warning(
-                        "[队列] 第 %d 次识别失败已达上限 %d，丢弃该段以免卡住 FIFO | 积压 %d",
-                        attempts + 1, max_attempts, self._backlog,
+                        "[队列] 第 %d 次识别失败已达上限 %d，丢弃 %d 段以免卡住 FIFO | 积压 %d",
+                        attempts + 1, max_attempts, removed, self._backlog,
                     )
                 else:
                     logger.warning(
-                        "[队列] 第 %d 次识别失败，保留该段，%d 秒后重试 | 积压 %d",
-                        attempts + 1, backoff, self._backlog,
+                        "[队列] 第 %d 次识别失败，保留该批（%d 段），%d 秒后重试 | 积压 %d",
+                        attempts + 1, len(batch), backoff, self._backlog,
                     )
                 # 先刷新积压统计再退避，前端不会看到过期数字
                 self._backlog, self._backlog_bytes, self._lag_sec = (
@@ -286,6 +297,40 @@ class AudioStreamer:
             self._backlog, self._backlog_bytes, self._lag_sec = (
                 await asyncio.to_thread(store.stats)
             )
+
+    async def _peek_merge_batch(self) -> list:
+        """取最旧的一批可合并段：相邻间隔 <= merge_gap 且总时长 <= merge_max。
+
+        created_at 是入队时刻（≈段结束时刻），用「下一段开始 − 上一段结束」
+        算间隔，比只看两段开始时间差更准。单条超长段会整条返回不合并。
+        """
+        store = self._store
+        try:
+            gap_max = float(
+                self.cfg.get("asr_merge_gap_sec", settings.asr_merge_gap_sec)
+            )
+            max_sec = int(
+                self.cfg.get("asr_merge_max_sec", settings.asr_merge_max_sec)
+            )
+        except (TypeError, ValueError):
+            gap_max = settings.asr_merge_gap_sec
+            max_sec = settings.asr_merge_max_sec
+        max_sec = max(1, max_sec)
+        max_bytes = max_sec * self.sample_rate * 2
+        rows = await asyncio.to_thread(store.peek_batch, 16, max_bytes)
+        if not rows:
+            return []
+        batch = [rows[0]]
+        if gap_max <= 0:
+            return batch
+        prev_end = float(rows[0][4])
+        for row in rows[1:]:
+            start = float(row[4]) - len(row[1]) / (self.sample_rate * 2)
+            if start - prev_end > gap_max:
+                break
+            batch.append(row)
+            prev_end = float(row[4])
+        return batch
 
     async def _consume_realtime(self):
         """实时优先：内存队列，排队超过阈值的片段直接丢弃。"""
@@ -470,6 +515,14 @@ class AudioStreamer:
                     "当前 ffmpeg 不支持墙钟时间戳选项，下次重连自动去掉；"
                     "如果摄像头时间戳不单调，可能重新出现 dts 告警刷屏"
                 )
+        # afftdn 滤镜缺失报 "No such filter: 'afftdn'"，直接关降噪快速重连
+        if "no such filter" in low and "afftdn" in low and self._afftdn_ok:
+            self._afftdn_ok = False
+            self._fallback_changed = True
+            logger.warning(
+                "当前 ffmpeg 无 afftdn 滤镜，轻度降噪自动关闭；"
+                "如需降噪请升级容器内 ffmpeg 版本"
+            )
         if any(h in low for h in self._FFMPEG_ERROR_HINTS) and not any(
             h in low for h in self._FFMPEG_IGNORE_HINTS
         ):
@@ -507,6 +560,7 @@ class AudioStreamer:
         """跑一次拉流，返回是否成功收到过音频数据（用于重连退避）。"""
         url = self.cfg.get("rtsp_url")
         highpass = int(self.cfg.get("ffmpeg_highpass", 100))
+        denoise = bool(self.cfg.get("ffmpeg_denoise", settings.ffmpeg_denoise))
         timeout_sec = max(5, int(self.cfg.get("ffmpeg_timeout", 20)))
         # 新一次拉流允许再降级一个不支持的选项
         self._option_fix_applied = False
@@ -524,9 +578,16 @@ class AudioStreamer:
             # 否则 s16le muxer 每包刷 "non monotonically increasing dts" 告警
             cmd += ["-use_wallclock_as_timestamps", "1", "-fflags", "+genpts"]
         cmd += ["-i", url, "-vn"]
+        filters = []
         if highpass > 0:
             # 风声/风扇/电源嗡鸣等低频噪声常把 VAD 误触发，高通滤波成本极低
-            cmd += ["-af", f"highpass=f={highpass}"]
+            filters.append(f"highpass=f={highpass}")
+        if denoise and self._afftdn_ok:
+            # 轻度自适应降噪：压稳态底噪（风扇/电流声），nr=12dB 温和不过头；
+            # 对强 BGM 广告帮助有限，但稳态人声的断句与字准会略好
+            filters.append("afftdn=nr=12:nf=-40:tn=1")
+        if filters:
+            cmd += ["-af", ",".join(filters)]
         cmd += [
             "-acodec", "pcm_s16le",
             "-ar", str(self.sample_rate),
