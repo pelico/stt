@@ -822,7 +822,9 @@ function updateVad(msg) {
   if (msg.qfail) text += ` · 队列丢 ${msg.qfail}`;
   if (msg.mode === 'durable' && (msg.backlog || 0) > 0) {
     text += ` · 待识别 ${msg.backlog}`;
-    if (msg.backlog_bytes) text += ` (${(msg.backlog_bytes / 1048576).toFixed(1)}MB)`;
+    if (msg.backlog_bytes) text += ` (${(msg.backlog_bytes / 1048576).toFixed(1)}MB`;
+    if (msg.lag_sec) text += ` · 滞后 ${fmtLag(msg.lag_sec)}`;
+    if (msg.backlog_bytes) text += ')';
   }
   if (msg.last_duration_ms) text += ` · 最近 ${(msg.last_duration_ms / 1000).toFixed(1)}s`;
   vadStats.textContent = text;
@@ -1143,28 +1145,42 @@ function fmtMs(ms) {
   return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
 }
 
+function fmtLag(sec) {
+  if (sec == null || sec <= 0) return '实时';
+  if (sec < 90) return Math.round(sec) + 's';
+  const m = Math.round(sec / 60);
+  if (m < 120) return m + ' 分钟';
+  return (m / 60).toFixed(1) + ' 小时';
+}
+
 function renderDiag(data) {
   if (!data || !data.diagnostics) return;
   const d = data.diagnostics;
   const err = d.last_error;
   const qt = data.queue_totals || {};
-  let html = `调用 <b>${d.calls ?? 0}</b> · 成功 <b>${d.ok ?? 0}</b> · 失败 <b>${d.failed ?? 0}</b>`
-    + ` · 连续失败 <b class="${(d.consecutive_failures || 0) > 0 ? 'bad' : 'good'}">${d.consecutive_failures ?? 0}</b>`
+  const sr = d.success_rate;
+  const srClass = sr == null ? '' : (sr >= 95 ? 'good' : (sr >= 80 ? 'warn' : 'bad'));
+  let html = `调用 <b>${d.calls ?? 0}</b> · 成功率 <b class="${srClass}">${sr == null ? '-' : sr + '%'}</b>`
     + ` · 最近 <b>${fmtMs(d.last_latency_ms)}</b> · P95 <b>${fmtMs(d.p95_latency_ms)}</b>`
-    + ` · 慢请求 <b>${d.slow_calls ?? 0}</b> · 积压 <b>${data.queue_backlog ?? 0}</b>`;
-
+    + ` · 积压 <b>${data.queue_backlog ?? 0}</b>`;
   const backlogBytes = data.queue_backlog_bytes || 0;
   if (data.queue_backlog > 0 && backlogBytes) {
     html += ` (${(backlogBytes / 1048576).toFixed(1)}MB)`;
   }
-  html += ` · 入队 <b>${qt.enqueued ?? 0}</b> · 出队 <b>${qt.done ?? 0}</b> · 队列丢 <b>${qt.failed ?? 0}</b>`
+  html += ` · 滞后 <b>${fmtLag(data.queue_lag_sec)}</b>`
+    + ` · 入队 <b>${qt.enqueued ?? 0}</b> · 出队 <b>${qt.done ?? 0}</b> · 队列丢 <b>${qt.failed ?? 0}</b>`;
+  mainDiagEl.innerHTML = html;
+
+  // 日志页保留更多细节：连续失败/慢请求/超时配置/最近错误详情
+  let logHtml = html
+    + ` · 连续失败 <b class="${(d.consecutive_failures || 0) > 0 ? 'bad' : 'good'}">${d.consecutive_failures ?? 0}</b>`
+    + ` · 慢请求 <b>${d.slow_calls ?? 0}</b>`
     + ` · 超时(连接/读取) <b>${data.asr_connect_timeout ?? '-'}s/${data.asr_timeout ?? '-'}s</b>`;
   if (err) {
-    html += ` | <span class="bad">${escHtml(err.code)}</span> ${escHtml((err.detail || '').slice(0, 160))}`
+    logHtml += ` | <span class="bad">${escHtml(err.code)}</span> ${escHtml((err.detail || '').slice(0, 160))}`
       + ` <span class="warn" title="${escHtml(err.hint)}">ⓘ</span>`;
   }
-  logDiagEl.innerHTML = html;
-  mainDiagEl.innerHTML = html;
+  logDiagEl.innerHTML = logHtml;
 }
 
 async function fetchLogs() {

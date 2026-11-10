@@ -154,13 +154,20 @@ class PendingStore:
             )
         )
 
-    def stats(self) -> Tuple[int, int]:
-        """返回 (积压条数, 待识别音频总字节数)。"""
+    def stats(self) -> Tuple[int, int, float]:
+        """返回 (积压条数, 待识别音频总字节数, 处理滞后秒数)。
+
+        滞后 = 当前时间 - 最老一条的采集时刻，即「现在正在补多久之前的话」；
+        队列为空时为 0。
+        """
         def _do(conn):
             row = conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM pending"
+                "SELECT COUNT(*), COALESCE(SUM(size), 0), "
+                "COALESCE(MIN(created_at), 0) FROM pending"
             ).fetchone()
-            return int(row[0]), int(row[1])
+            count, total, oldest = int(row[0]), int(row[1]), float(row[2])
+            lag = max(0.0, time.time() - oldest) if count and oldest else 0.0
+            return count, total, lag
         return self._run(_do)
 
     def maybe_vacuum(self, threshold_mb: int = 64) -> bool:

@@ -462,6 +462,7 @@ async def health():
         "queue_mode": _streamer.mode if _streamer else None,
         "queue_backlog": _streamer.backlog if _streamer else 0,
         "queue_backlog_bytes": _streamer.backlog_bytes if _streamer else 0,
+        "queue_lag_sec": _streamer.lag_sec if _streamer else 0,
         "queue_totals": _streamer.queue_totals if _streamer else None,
         "diagnostics": metrics.snapshot(),
         "asr_timeout": settings.asr_timeout,

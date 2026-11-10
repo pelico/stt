@@ -88,11 +88,12 @@ class AudioStreamer:
             PendingStore() if self._mode == "durable" else None
         )
         self._wakeup = asyncio.Event()
-        init_count, init_bytes = (
-            self._store.stats() if self._store else (0, 0)
+        init_count, init_bytes, init_lag = (
+            self._store.stats() if self._store else (0, 0, 0.0)
         )
         self._backlog = init_count
         self._backlog_bytes = init_bytes
+        self._lag_sec = init_lag
         self._last_vacuum = 0.0
 
         # 调试统计
@@ -139,6 +140,7 @@ class AudioStreamer:
             "queued": self._queue.qsize(),
             "backlog": self._backlog,
             "backlog_bytes": self._backlog_bytes,
+            "lag_sec": round(self._lag_sec),
             "mode": self._mode,
             "stale": self._stale_dropped,
             "enq": self._enqueued_total,
@@ -165,6 +167,11 @@ class AudioStreamer:
     def backlog_bytes(self) -> int:
         """待识别音频总字节数。"""
         return self._backlog_bytes
+
+    @property
+    def lag_sec(self) -> float:
+        """处理滞后秒数：正在补多久之前采集的话。"""
+        return self._lag_sec
 
     @property
     def queue_totals(self) -> dict:
@@ -212,8 +219,8 @@ class AudioStreamer:
         while True:
             # 暂停/时段外：保留积压，等恢复后继续补完，不消耗重试次数
             if not asr_active(self.cfg):
-                self._backlog, self._backlog_bytes = await asyncio.to_thread(
-                    store.stats
+                self._backlog, self._backlog_bytes, self._lag_sec = (
+                    await asyncio.to_thread(store.stats)
                 )
                 await asyncio.sleep(2)
                 continue
@@ -271,13 +278,13 @@ class AudioStreamer:
                         attempts + 1, backoff, self._backlog,
                     )
                 # 先刷新积压统计再退避，前端不会看到过期数字
-                self._backlog, self._backlog_bytes = await asyncio.to_thread(
-                    store.stats
+                self._backlog, self._backlog_bytes, self._lag_sec = (
+                    await asyncio.to_thread(store.stats)
                 )
                 # 失败退避，配合 main.py 的熔断，服务端故障期间不空转刷请求
                 await asyncio.sleep(backoff)
-            self._backlog, self._backlog_bytes = await asyncio.to_thread(
-                store.stats
+            self._backlog, self._backlog_bytes, self._lag_sec = (
+                await asyncio.to_thread(store.stats)
             )
 
     async def _consume_realtime(self):
@@ -294,6 +301,7 @@ class AudioStreamer:
                 except (TypeError, ValueError):
                     max_age = settings.asr_max_queue_age
                 age = time.monotonic() - created_at
+                self._lag_sec = max(0.0, age)
                 if max_age > 0 and age > max_age:
                     self._stale_dropped += 1
                     self._fail_total += 1
@@ -332,8 +340,8 @@ class AudioStreamer:
                 self._fail_total += 1
                 logger.error("[队列] 落盘失败，该段已丢失: %s", e)
                 return
-            self._backlog, self._backlog_bytes = await asyncio.to_thread(
-                self._store.stats
+            self._backlog, self._backlog_bytes, self._lag_sec = (
+                await asyncio.to_thread(self._store.stats)
             )
             self._enqueued_total += 1
             logger.info(
