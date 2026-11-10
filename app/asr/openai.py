@@ -30,6 +30,11 @@ class OpenAISR(BaseASR):
         self.slow_ms = max(1000, int(settings.asr_slow_ms))
         self._endpoint = f"{self.base_url}/audio/transcriptions"
         self._host = urlsplit(self.base_url).netloc or self.base_url
+        # 连接复用：识别 worker 是单消费者串行，同一时刻只有一个请求，
+        # Session 跨线程共享是安全的。省去每段一次的 TCP+TLS 握手
+        # （约 0.3~0.5s）；对端空闲断开时 urllib3 会自动换新连接，
+        # 极小概率的陈旧连接失败由队列的重试机制兜底。
+        self._session = requests.Session()
 
     def _transcribe_sync(self, pcm: bytes) -> str:
         req = metrics.next_id()
@@ -50,7 +55,7 @@ class OpenAISR(BaseASR):
         started = time.monotonic()
         resp = None
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 self._endpoint,
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 files={"file": ("audio.wav", wav, "audio/wav")},
