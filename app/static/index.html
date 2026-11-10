@@ -268,6 +268,18 @@
   .log-diag .warn { color: #fbbf24; }
   .log-diag .good { color: #4ade80; }
 
+  /* 首页实时诊断摘要（与日志面板同一份数据） */
+  .main-diag {
+    margin: 4px 14px 0; padding: 6px 0 2px; font-size: 11px; color: #94a3b8;
+    border-top: 1px solid #1e293b;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: nowrap; overflow-x: auto;
+  }
+  .main-diag b { color: #e2e8f0; font-weight: 600; }
+  .main-diag .bad { color: #f87171; }
+  .main-diag .warn { color: #fbbf24; }
+  .main-diag .good { color: #4ade80; }
+
   /* 设置抽屉 */
   .drawer-mask {
     position: fixed;
@@ -398,8 +410,9 @@
     <div class="vad-bar">
       <span class="vad-badge" id="vad-badge">静音</span>
       <div class="vad-meter"><div class="vad-meter-fill" id="vad-level"></div></div>
-      <span class="vad-stats" id="vad-stats">切段 0 · 丢弃 0</span>
+      <span class="vad-stats" id="vad-stats">切段 0 · 入队 0 · 出队 0</span>
     </div>
+    <div class="main-diag" id="main-diag">诊断摘要加载中…</div>
     <div id="live-content" class="live-content">
       <div class="empty">等待语音输入...</div>
     </div>
@@ -792,7 +805,7 @@ function updateStreamState(paused) {
     vadStats.textContent = '不在时段内，拉流已停止';
   } else {
     vadBadge.textContent = '静音';
-    vadStats.textContent = '切段 0 · 丢弃 0';
+    vadStats.textContent = '切段 0 · 入队 0 · 出队 0';
     if (listenWanted) showToast('已进入时段，拉流恢复');
   }
 }
@@ -803,9 +816,12 @@ function updateVad(msg) {
   vadLevel.style.background = msg.speech ? '#22c55e' : '#3b82f6';
   vadBadge.textContent = msg.active ? '说话中' : (msg.speech ? '语音' : '静音');
   vadBadge.className = 'vad-badge' + (msg.active ? ' on' : '');
-  let text = `切段 ${msg.segments} · 丢弃 ${msg.dropped}`;
+  let text = `切段 ${msg.segments ?? 0}`;
+  if (msg.dropped) text += ` · VAD丢 ${msg.dropped}`;
+  text += ` · 入队 ${msg.enq ?? 0} · 出队 ${msg.deq ?? 0}`;
+  if (msg.qfail) text += ` · 队列丢 ${msg.qfail}`;
   if (msg.mode === 'durable' && (msg.backlog || 0) > 0) text += ` · 待识别 ${msg.backlog}`;
-  if (msg.last_duration_ms) text += ` · 最近 ${msg.last_duration_ms}ms`;
+  if (msg.last_duration_ms) text += ` · 最近 ${(msg.last_duration_ms / 1000).toFixed(1)}s`;
   vadStats.textContent = text;
 }
 
@@ -1071,6 +1087,7 @@ let logKeyword = '';
 const logLevelSel = document.getElementById('log-level');
 const logSearchInput = document.getElementById('log-search');
 const logDiagEl = document.getElementById('log-diag');
+const mainDiagEl = document.getElementById('main-diag');
 
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1127,16 +1144,19 @@ function renderDiag(data) {
   if (!data || !data.diagnostics) return;
   const d = data.diagnostics;
   const err = d.last_error;
+  const qt = data.queue_totals || {};
   let html = `调用 <b>${d.calls ?? 0}</b> · 成功 <b>${d.ok ?? 0}</b> · 失败 <b>${d.failed ?? 0}</b>`
     + ` · 连续失败 <b class="${(d.consecutive_failures || 0) > 0 ? 'bad' : 'good'}">${d.consecutive_failures ?? 0}</b>`
     + ` · 最近 <b>${fmtMs(d.last_latency_ms)}</b> · P95 <b>${fmtMs(d.p95_latency_ms)}</b>`
     + ` · 慢请求 <b>${d.slow_calls ?? 0}</b> · 积压 <b>${data.queue_backlog ?? 0}</b>`
+    + ` · 入队 <b>${qt.enqueued ?? 0}</b> · 出队 <b>${qt.done ?? 0}</b> · 队列丢 <b>${qt.failed ?? 0}</b>`
     + ` · 超时(连接/读取) <b>${data.asr_connect_timeout ?? '-'}s/${data.asr_timeout ?? '-'}s</b>`;
   if (err) {
     html += ` | <span class="bad">${escHtml(err.code)}</span> ${escHtml((err.detail || '').slice(0, 160))}`
       + ` <span class="warn" title="${escHtml(err.hint)}">ⓘ</span>`;
   }
   logDiagEl.innerHTML = html;
+  mainDiagEl.innerHTML = html;
 }
 
 async function fetchLogs() {

@@ -98,6 +98,13 @@ class AudioStreamer:
         self._stale_dropped = 0
         self._last_stale_log = 0.0
 
+        # 累计队列计数：入队 / 完成识别 / 队列级丢弃（重试耗尽、落盘失败）。
+        # 随 VAD 状态推送与 /api/health 暴露，首页可直观看到「切了多少段、
+        # 真正识别了多少、丢了多少」，便于对照音频判断 VAD 参数是否合适。
+        self._enqueued_total = 0
+        self._done_total = 0
+        self._fail_total = 0
+
         # ffmpeg 参数兼容性降级：老版本 ffmpeg（嵌入式/精简构建）可能不认识
         # -rw_timeout / 墙钟时间戳选项，报 "Option not found" 连输入文件都
         # 打不开。首次报错后自动去掉对应参数并快速重连，只损失该参数的功能。
@@ -128,6 +135,9 @@ class AudioStreamer:
             "backlog": self._backlog,
             "mode": self._mode,
             "stale": self._stale_dropped,
+            "enq": self._enqueued_total,
+            "deq": self._done_total,
+            "qfail": self._fail_total,
         }
 
     @property
@@ -144,6 +154,15 @@ class AudioStreamer:
     def backlog(self) -> int:
         """待识别积压条数。"""
         return self._backlog
+
+    @property
+    def queue_totals(self) -> dict:
+        """累计队列计数：入队 / 完成识别 / 队列级丢弃。"""
+        return {
+            "enqueued": self._enqueued_total,
+            "done": self._done_total,
+            "failed": self._fail_total,
+        }
 
     def restart(self):
         """立即中断当前拉流，用新配置重连。"""
@@ -207,6 +226,7 @@ class AudioStreamer:
                 done = False
 
             if done:
+                self._done_total += 1
                 await asyncio.to_thread(store.delete, row_id)
             else:
                 try:
@@ -220,6 +240,7 @@ class AudioStreamer:
                 removed = await asyncio.to_thread(store.bump, row_id, max_attempts)
                 backoff = min(30, 2 ** min(attempts, 4))
                 if removed:
+                    self._fail_total += 1
                     logger.warning(
                         "[队列] 第 %d 次识别失败已达上限 %d，丢弃该段以免卡住 FIFO | 积压 %d",
                         attempts + 1, max_attempts, self._backlog,
@@ -249,6 +270,7 @@ class AudioStreamer:
                 age = time.monotonic() - created_at
                 if max_age > 0 and age > max_age:
                     self._stale_dropped += 1
+                    self._fail_total += 1
                     now = time.monotonic()
                     if now - self._last_stale_log >= 10:
                         self._last_stale_log = now
@@ -258,11 +280,16 @@ class AudioStreamer:
                             age, self._stale_dropped, self._queue.qsize(),
                         )
                     continue
-                await self.on_speech_segment(segment)
+                res = await self.on_speech_segment(segment)
+                if res is False:
+                    self._fail_total += 1
+                else:
+                    self._done_total += 1
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error("识别任务异常: %s", e)
+                self._fail_total += 1
             finally:
                 self._queue.task_done()
 
@@ -276,9 +303,11 @@ class AudioStreamer:
                     self._store.put, segment, utc_iso_naive(), max_items, max_mb,
                 )
             except Exception as e:
+                self._fail_total += 1
                 logger.error("[队列] 落盘失败，该段已丢失: %s", e)
                 return
             self._backlog = backlog
+            self._enqueued_total += 1
             logger.info(
                 "[队列] 入队 %.1fs/%dKB | 积压 %d | 上限 %d条/%dMB",
                 len(segment) / (self.sample_rate * 2), len(segment) // 1024,
@@ -298,10 +327,12 @@ class AudioStreamer:
             try:
                 self._queue.get_nowait()
                 self._queue.task_done()
+                self._fail_total += 1
                 logger.warning("识别队列已满，丢弃最旧的一段")
             except asyncio.QueueEmpty:
                 pass
         self._queue.put_nowait((time.monotonic(), segment))
+        self._enqueued_total += 1
 
     async def _notify_stream_state(self, paused: bool):
         if self.on_stream_state is None:

@@ -461,6 +461,7 @@ async def health():
         "stream_running": bool(_stream_task and not _stream_task.done()),
         "queue_mode": _streamer.mode if _streamer else None,
         "queue_backlog": _streamer.backlog if _streamer else 0,
+        "queue_totals": _streamer.queue_totals if _streamer else None,
         "diagnostics": metrics.snapshot(),
         "asr_timeout": settings.asr_timeout,
         "asr_connect_timeout": settings.asr_connect_timeout,
