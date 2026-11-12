@@ -254,8 +254,8 @@ class AudioStreamer:
             queued_sec = max(0.0, time.time() - batch[0][4])
             merged_log = "" if len(batch) == 1 else f"（合并 {len(batch)} 段）"
             logger.info(
-                "[队列] 出队%s | 等待 %.1fs | 积压 %d | 第 %d 次尝试 | 模式 %s",
-                merged_log, queued_sec, self._backlog, attempts + 1, self._mode,
+                "[队列] 出队%s | 等待 %.0fs | 积压 %d | 第 %d 次尝试",
+                merged_log, queued_sec, self._backlog, attempts + 1,
             )
             try:
                 done = await self.on_speech_segment(pcm, wall_iso)
@@ -394,9 +394,9 @@ class AudioStreamer:
             )
             self._enqueued_total += 1
             logger.info(
-                "[队列] 入队 %.1fs/%dKB | 积压 %d | 上限 %d条/%dMB",
+                "[队列] 入队 %.1fs/%dKB | 积压 %d",
                 len(segment) / (self.sample_rate * 2), len(segment) // 1024,
-                backlog, max_items, max_mb,
+                backlog,
             )
             if dropped:
                 logger.warning(

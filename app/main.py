@@ -189,7 +189,9 @@ async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -
     if not cfg.get("asr_enabled", True):
         logger.debug("识别总开关已关闭，跳过 %.1f 秒语音", duration_sec)
         return True
-    logger.info(
+    # 开始明细降为 DEBUG：引擎/模式/连续失败都是静态或异常时才需要的信息，
+    # 音频大小在 ASR 请求行里有，正常路径不重复打印
+    logger.debug(
         "[段] 开始 | 音频 %.1fs/%dKB | 排队 %.1fs | 积压 %d | 引擎 %s | 模式 %s | 连续失败 %d",
         duration_sec, len(audio_data) // 1024, queue_lag, backlog,
         cfg.get("asr_engine"), _streamer.mode if _streamer else "-", _asr_failures,
@@ -243,7 +245,8 @@ async def on_speech_segment(audio_data: bytes, wall_iso: Optional[str] = None) -
         if captured_at else 0.0
     )
     prefix = "（延迟 %.0f 秒补处理）" % lag if lag > 30 else ""
-    logger.info(
+    # 结果明细降为 DEBUG：耗时与文本已在 [ASR] ✓ 行，正常路径不重复
+    logger.debug(
         "[段] 结果%s | 耗时 %.2fs | 排队 %.1fs | 积压 %d | %s",
         prefix, time.monotonic() - started, queue_lag, backlog,
         text.replace("\n", " ")[:120],

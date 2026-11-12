@@ -81,11 +81,9 @@ class OpenAISR(BaseASR):
         )
 
         logger.info(
-            "[ASR] req#%d → POST %s | host=%s model=%s lang=%s "
-            "audio=%.1fs/%dKB wav=%dKB timeout=(connect %ds, read %ds) "
-            "predict=%.1fs(rt=%.2f)",
-            req, self._endpoint, self._host, self.model, self.language,
-            duration, len(pcm) // 1024, len(wav) // 1024,
+            "[ASR] req#%d → %s | 音频 %.1fs/%dKB | 超时 连%ds/读%ds "
+            "| 预测 %.1fs(rt=%.2f)",
+            req, self._host, duration, len(pcm) // 1024,
             self.connect_timeout, read_timeout,
             predict_s, self._learned_rt,
         )
@@ -101,8 +99,6 @@ class OpenAISR(BaseASR):
                 timeout=(self.connect_timeout, read_timeout),
             )
             latency = time.monotonic() - started
-            elapsed = getattr(resp, "elapsed", None)
-            ttfb = elapsed.total_seconds() if elapsed else 0.0
             resp.raise_for_status()
             try:
                 text = (resp.json().get("text") or "").strip()
@@ -119,11 +115,8 @@ class OpenAISR(BaseASR):
                 self._learned_rt = 0.7 * self._learned_rt + 0.3 * rt
             metrics.record(ok=True, latency_s=latency, slow=slow, url=self._host)
             logger.info(
-                "[ASR] req#%d ✓ %.2fs (ttfb %.2fs, http %d, resp %dB, "
-                "预测 %.1fs) text=%d字: %s",
-                req, latency, ttfb, getattr(resp, "status_code", 0),
-                len(getattr(resp, "content", b"") or b""),
-                predict_s,
+                "[ASR] req#%d %s %.2fs/预测%.1fs | %d字: %s",
+                req, "⚠" if slow else "✓", latency, predict_s,
                 len(text), text[:80].replace("\n", " "),
             )
             if slow:

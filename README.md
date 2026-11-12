@@ -183,13 +183,13 @@ FastAPI → SQLite（历史，timestamp=说话时刻）+ WebSocket → 浏览器
 一次请求在日志里是几行，用 `req#N` 串起来：
 
 ```text
-16:40:01 INFO  [段] 开始 | 音频 1.9s/60KB | 排队 0.2s | 积压 9 | 引擎 openai | 模式 durable | 连续失败 0
-16:40:01 INFO  [ASR] req#18 → POST https://<域名>/stt/v1/audio/transcriptions | host=<域名> model=sensevoice-small lang=zh audio=1.9s/60KB wav=61KB timeout=(connect 10s, read 45s)
+16:40:01 INFO  [队列] 出队 | 等待 0s | 积压 9 | 第 1 次尝试
+16:40:01 INFO  [ASR] req#18 → <域名> | 音频 1.9s/60KB | 超时 连10s/读45s | 预测 5.8s(rt=1.50)
 16:40:46 ERROR [ASR] req#18 ✗ read_timeout after 45.02s | host=<域名> | requests.exceptions.ReadTimeout: ... | 建议: 连接已建立但服务端在读取超时内没返回，检查 GCP 的 CPU/swap/模型加载
 16:40:46 ERROR [段] 失败 | 连续 1/3 次 | 耗时 45.03s | 排队 0.2s | 积压 14 | ReadTimeout: ...
 ```
 
-直接可读：音频多大、请求了谁、连接/读取超时各设多少、等了多久、积压涨到多少、连续失败几次。**超时拆成 connect/read 两个值**后，握手失败和推理慢不会再混成一句 `Read timed out`。成功时还会打 `ttfb`（响应头到达耗时）、响应体大小与**预测耗时**。「慢请求」WARNING 用**动态阈值**判断：预计耗时 = 音频时长 × 实时率 + 固定开销（实时率按成功请求实测自学习，EMA 平滑），实际耗时超过 预测 × `ASR_SLOW_MARGIN` 才告警，短音频仍受 `ASR_SLOW_MS` 固定基线保护——长音频不再被固定 10s 阈值误报。
+直接可读：音频多大、请求了谁、连接/读取超时各设多少、等了多久、积压涨到多少、连续失败几次。**超时拆成 connect/read 两个值**后，握手失败和推理慢不会再混成一句 `Read timed out`。成功行只打一条：`[ASR] req#N ✓ 11.2s/预测15.0s | 54字: <文本>`——耗时与预测比值一眼可见，识别文本全日志只出现这一次（`[段] 开始/结果` 的明细已降为 DEBUG，静态配置如引擎/模式/队列上限不再每行重复）。「慢请求」WARNING 用**动态阈值**判断：预计耗时 = 音频时长 × 实时率 + 固定开销（实时率按成功请求实测自学习，EMA 平滑），实际耗时超过 预测 × `ASR_SLOW_MARGIN` 才告警，短音频仍受 `ASR_SLOW_MS` 固定基线保护——长音频不再被固定 10s 阈值误报。
 
 | 错误码 | 含义 | 先查哪里 |
 |---|---|---|
