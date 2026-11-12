@@ -577,6 +577,12 @@ class AudioStreamer:
         low_url = url.strip().lower()
         if low_url.startswith("rtsp://") or low_url.startswith("rtsps://"):
             cmd += ["-rtsp_transport", "tcp"]
+        else:
+            # RTSP/直播流数据按实时到达；点播类源（HTTP/HLS 影片、本地文件）
+            # 会被 ffmpeg 全速解码，PCM 灌入速度是实时的好几倍——下游按
+            # 采样率换算时间，表现为倍速快放、VAD 时间戳错乱。
+            # -re 按 PTS 原速读取（官方模拟实时设备的标准参数）
+            cmd += ["-re"]
         # 网络半开时不要无限等；配合下面的无数据看门狗双保险。
         # ffmpeg 不支持该选项时由 _log_ffmpeg_line 自动置 False 降级
         if self._rw_timeout_ok:
