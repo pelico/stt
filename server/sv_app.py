@@ -19,8 +19,17 @@ v3 改进（2026-11-10）：
   - onnxruntime 的 session.Run 线程安全（sherpa-onnx 自家 offline
     websocket server 就是单 recognizer 多线程并发 decode）。
   内存几乎不变（模型只有一份）。表现异常时设 SV_WORKERS=1 退回串行。
+
+v3.1 改进（2026-11-12，针对 1G 内存小机的 swap 抖动）：
+  1. mlockall：默认把本进程全部内存钉死在物理 RAM（SV_MLOCK=0 关闭），
+     内核内存紧张时只能换出其他进程——即「模型常驻 RAM，别人去 swap」。
+     需要 systemd 单元里 LimitMEMLOCK=infinity，否则锁定失败退回普通模式。
+  2. WAV 快路径：rtsp-stt 客户端发的本来就是 16kHz 单声道 s16le WAV，
+     直接用 wave 模块读取，跳过每次请求的 ffmpeg 转码子进程（内存尖峰
+     源头之一）；只有非该格式的输入才走 ffmpeg。
 """
 import asyncio
+import ctypes
 import logging
 import os
 import re
@@ -47,6 +56,36 @@ SV_LANGUAGE = os.environ.get("SV_LANGUAGE", "zh")
 FILTER_ENABLED = os.environ.get("SV_FILTER", "1") != "0"
 # 并发推理线程数：2 vCPU 机器建议 2（每请求 num_threads=1，正好各占一核）
 SV_WORKERS = max(1, int(os.environ.get("SV_WORKERS", "2")))
+
+
+def _mlock_all() -> None:
+    """把本进程全部内存（含之后加载的模型）钉在物理 RAM。
+
+    1G 小机上模型被换出到 swap 后，每次推理都从磁盘换页回内存
+    （实测 si 300MB/s、iowait 95%、load 14），请求 45 秒超时。
+    mlockall 后内核只能换出其他进程——正是「模型优先驻留 RAM」语义。
+    需要 systemd LimitMEMLOCK=infinity；失败则记日志退回普通模式。
+    """
+    if os.environ.get("SV_MLOCK", "1") == "0":
+        logger.info("SV_MLOCK=0，跳过内存锁定")
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        MCL_CURRENT, MCL_FUTURE = 1, 2
+        if libc.mlockall(MCL_CURRENT | MCL_FUTURE) == 0:
+            logger.info("mlockall 成功：模型内存将常驻 RAM，不会被换出到 swap")
+        else:
+            err = ctypes.get_errno()
+            logger.warning(
+                "mlockall 失败（errno=%d，多半是 RLIMIT_MEMLOCK 太小），"
+                "请在 systemd 单元加 LimitMEMLOCK=infinity 后重启",
+                err,
+            )
+    except Exception as e:  # 锁定失败不影响服务可用性
+        logger.warning("mlockall 异常: %s（继续普通模式）", e)
+
+
+_mlock_all()
 
 recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
     model=os.path.join(MODEL_DIR, "model.int8.onnx"),
@@ -121,16 +160,43 @@ def _is_filler(text: str) -> bool:
     return False
 
 
+def _direct_wav_samples(path: str):
+    """输入已是 16kHz 单声道 s16le WAV 时直接读样本，返回 None 则走 ffmpeg。
+
+    rtsp-stt 客户端上传的就是这种格式——跳过每次请求的 ffmpeg 子进程，
+    1G 小机上子进程 fork+编码是每次请求的内存尖峰源头之一。
+    """
+    try:
+        with wave.open(path, "rb") as w:
+            if (
+                w.getframerate() == 16000
+                and w.getnchannels() == 1
+                and w.getsampwidth() == 2
+            ):
+                raw = w.readframes(w.getnframes())
+                samples = (
+                    np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                )
+                return 16000, samples
+    except (wave.Error, EOFError, PermissionError, FileNotFoundError):
+        pass
+    return None
+
+
 def _transcribe_sync(src: str) -> str:
     """完整的转码 + 推理 + 过滤流水线，在线程池里跑（CPU 密集）。"""
-    wav = _to_wav16k(src)
-    try:
-        rate, samples = _read_samples(wav)
-    finally:
+    direct = _direct_wav_samples(src)
+    if direct is not None:
+        rate, samples = direct
+    else:
+        wav = _to_wav16k(src)
         try:
-            os.remove(wav)
-        except OSError:
-            pass
+            rate, samples = _read_samples(wav)
+        finally:
+            try:
+                os.remove(wav)
+            except OSError:
+                pass
     if samples.size == 0:
         return ""
 
