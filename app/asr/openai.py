@@ -81,7 +81,7 @@ class OpenAISR(BaseASR):
         )
 
         logger.info(
-            "[ASR] req#%d → %s | 音频 %.1fs/%dKB | 超时 连%ds/读%ds "
+            "[ASR] req#%d ASR请求 %s | 音频 %.1fs/%dKB | 超时 连%ds/读%ds "
             "| 预测 %.1fs(rt=%.2f)",
             req, self._host, duration, len(pcm) // 1024,
             self.connect_timeout, read_timeout,
@@ -115,7 +115,7 @@ class OpenAISR(BaseASR):
                 self._learned_rt = 0.7 * self._learned_rt + 0.3 * rt
             metrics.record(ok=True, latency_s=latency, slow=slow, url=self._host)
             logger.info(
-                "[ASR] req#%d %s %.2fs/预测%.1fs | %d字: %s",
+                "[ASR] req#%d ASR结果 %s %.2fs/预测%.1fs | %d字: %s",
                 req, "⚠" if slow else "✓", latency, predict_s,
                 len(text), text[:80].replace("\n", " "),
             )
@@ -140,7 +140,7 @@ class OpenAISR(BaseASR):
                 url=self._host,
             )
             logger.error(
-                "[ASR] req#%d ✗ %s after %.2fs | host=%s | %s | 建议: %s",
+                "[ASR] req#%d ASR失败 %s after %.2fs | host=%s | %s | 建议: %s",
                 req, info["code"], latency, self._host,
                 info["detail"], info["hint"],
             )

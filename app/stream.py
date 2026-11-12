@@ -715,7 +715,6 @@ class AudioStreamer:
                         if speech_frames >= min_speech and ratio >= min_ratio:
                             self._segments += 1
                             self._last_duration_ms = duration_ms
-                            logger.info("语音段结束: %.1f 秒", duration_ms / 1000)
                             await self._enqueue(speech_buffer)
                         else:
                             self._dropped += 1
