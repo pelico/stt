@@ -81,10 +81,8 @@ class OpenAISR(BaseASR):
         )
 
         logger.info(
-            "[ASR] req#%d ASR请求 %s | 音频 %.1fs/%dKB | 超时 连%ds/读%ds "
-            "| 预测 %.1fs(rt=%.2f)",
+            "[ASR] req#%d ASR请求 %s | 音频 %.1fs/%dKB | 预测 %.1fs(rt=%.2f)",
             req, self._host, duration, len(pcm) // 1024,
-            self.connect_timeout, read_timeout,
             predict_s, self._learned_rt,
         )
 
