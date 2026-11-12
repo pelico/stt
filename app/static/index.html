@@ -389,6 +389,65 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: #991b1b; color: #fee2e2; }
+
+  /* ---- 手机端适配（≤768px）---- */
+  @media (max-width: 768px) {
+    /* dvh 解决手机地址栏收放时 100vh 不准的问题 */
+    body { height: 100vh; height: 100dvh; }
+
+    header {
+      flex-wrap: wrap;
+      padding: 8px 12px;
+      row-gap: 6px;
+    }
+    header h1 { font-size: 15px; }
+    .icon-btn { padding: 8px 12px; }
+
+    /* 双栏改上下堆叠，整页可滚动：实时字幕在上（约半屏），历史在下 */
+    main {
+      flex-direction: column;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 8px;
+      gap: 8px;
+    }
+    .live-panel { flex: none; height: 52vh; height: 52dvh; min-height: 220px; }
+    .history-panel { width: auto; flex: 1; min-height: 260px; }
+    .panel-title { padding: 8px 10px; }
+
+    /* 诊断摘要允许折行，不再强制横向滚动 */
+    .main-diag {
+      white-space: normal;
+      word-break: break-all;
+      margin: 4px 10px 0;
+      line-height: 1.6;
+    }
+    .vad-bar { padding: 8px 10px; }
+    .live-content, .history-search { padding: 8px 10px; }
+    .live-item, .history-item { padding-left: 10px; padding-right: 10px; }
+    .live-item .text { font-size: 15px; }
+
+    /* iOS Safari：输入框字号 <16px 聚焦时会强制缩放页面，统一提到 16px */
+    .history-search input,
+    .field input, .field select, .log-head select, .log-head input { font-size: 16px; }
+
+    /* 日志抽屉占更高、头部过滤器允许换行 */
+    .log-panel { height: 78vh; height: 78dvh; }
+    .log-head { flex-wrap: wrap; padding: 8px 12px; }
+    .log-head .log-meta { display: none; }  /* 手机上省空间，桌面仍显示 */
+    .log-head select, .log-head input { flex: 1; min-width: 0; }
+    .log-head input { width: auto; }
+    .log-body { padding: 8px 10px; }
+    .log-diag { padding: 6px 10px; white-space: normal; word-break: break-all; }
+
+    /* 设置抽屉手机上全屏宽 */
+    .drawer { width: 100vw; max-width: 100vw; }
+    .drawer-head, .drawer-body, .drawer-foot { padding-left: 16px; padding-right: 16px; }
+  }
+  /* 窄屏再加一档：横排按钮挤不下时标题独占一行 */
+  @media (max-width: 420px) {
+    header h1 { font-size: 14px; flex-basis: 100%; }
+  }
 </style>
 </head>
 <body>
