@@ -44,12 +44,18 @@ class OpenAISR(BaseASR):
         if self.language != "auto":
             data["language"] = self.language
 
+        # 读超时按音频时长自适应：SenseVoice 推理约 1~1.5 倍实时，固定 45s
+        # 会被 30s 合并块（推理 30~45s）误杀——超时→重试→服务端单 worker
+        # 排队→更慢→再超时，形成活锁。max(固定值, 时长×2+15) 保证正常
+        # 推理永不超时；服务端真死时仍由固定值 + 熔断兜底。
+        read_timeout = max(self.read_timeout, int(duration * 2) + 15)
+
         logger.info(
             "[ASR] req#%d → POST %s | host=%s model=%s lang=%s "
             "audio=%.1fs/%dKB wav=%dKB timeout=(connect %ds, read %ds)",
             req, self._endpoint, self._host, self.model, self.language,
             duration, len(pcm) // 1024, len(wav) // 1024,
-            self.connect_timeout, self.read_timeout,
+            self.connect_timeout, read_timeout,
         )
 
         started = time.monotonic()
@@ -60,7 +66,7 @@ class OpenAISR(BaseASR):
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 files={"file": ("audio.wav", wav, "audio/wav")},
                 data=data,
-                timeout=(self.connect_timeout, self.read_timeout),
+                timeout=(self.connect_timeout, read_timeout),
             )
             latency = time.monotonic() - started
             elapsed = getattr(resp, "elapsed", None)

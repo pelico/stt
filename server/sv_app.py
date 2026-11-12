@@ -45,6 +45,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -52,6 +53,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import sherpa_onnx
 from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("sensevoice")
@@ -139,8 +141,15 @@ else:
     )
     ASR_TYPE = "sensevoice"
 logger.info("ASR 引擎: %s", ASR_TYPE)
-# 每个线程完整跑「ffmpeg 转码 + 读样本 + 推理」，互不共享可变状态
+# 每个线程完整跑「转码 + 读样本 + 推理」，互不共享可变状态
 _pool = ThreadPoolExecutor(max_workers=SV_WORKERS, thread_name_prefix="asr")
+
+# 排队上限：单 worker 时，第 1 个在推理、其余在队列里挂着连接干等。
+# 客户端超时重试会在这里堆积成活锁（超时→重试→排队→更慢→再超时）。
+# 排队数超上限直接回 503，客户端收到后按退避节奏重发，不再白挂连接。
+SV_MAX_PENDING = max(1, int(os.environ.get("SV_MAX_PENDING", "3")))
+_pending = 0
+_pending_lock = threading.Lock()
 
 TAG_RE = re.compile(r"<\|[^|]*\|>")
 PUNCT_RE = re.compile(r"[\s，。！？、,.!?~…:：;；\"'“”‘’()（）\-—_/\\|]+")
@@ -287,6 +296,12 @@ async def transcriptions(
     language: str = Form("auto"),
     prompt: str = Form(""),
 ):
+    global _pending
+    with _pending_lock:
+        if _pending >= SV_MAX_PENDING:
+            logger.warning("排队满（%d/%d），拒绝请求回 503", _pending, SV_MAX_PENDING)
+            return JSONResponse(status_code=503, content={"error": "busy"})
+        _pending += 1
     suffix = os.path.splitext(file.filename or "audio")[1] or ".bin"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -300,6 +315,8 @@ async def transcriptions(
             return {"text": "", "error": "invalid audio data"}
         return {"text": text}
     finally:
+        with _pending_lock:
+            _pending -= 1
         try:
             os.remove(src)
         except OSError:
