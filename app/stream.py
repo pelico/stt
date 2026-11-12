@@ -571,8 +571,12 @@ class AudioStreamer:
         cmd = [
             settings.ffmpeg_path,
             "-hide_banner", "-nostats", "-loglevel", "warning",
-            "-rtsp_transport", "tcp",
         ]
+        # -rtsp_transport 是 RTSP demuxer 专属选项，喂给 HLS/HTTP 流会报
+        # "Option not found" 连输入都打不开；只对 rtsp:// 地址传入
+        low_url = url.strip().lower()
+        if low_url.startswith("rtsp://") or low_url.startswith("rtsps://"):
+            cmd += ["-rtsp_transport", "tcp"]
         # 网络半开时不要无限等；配合下面的无数据看门狗双保险。
         # ffmpeg 不支持该选项时由 _log_ffmpeg_line 自动置 False 降级
         if self._rw_timeout_ok:
