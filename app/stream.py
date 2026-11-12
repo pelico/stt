@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import webrtcvad
 
 from app.config import settings
+from app.diagnostics import metrics
 from app.pending_store import PendingStore, utc_iso_naive
 
 try:  # Python <= 3.12 自带；3.13+ 已移除，用纯 Python 兜底
@@ -252,11 +253,13 @@ class AudioStreamer:
             wall_iso = batch[0][2]
             attempts = min(row[3] for row in batch)
             queued_sec = max(0.0, time.time() - batch[0][4])
-            merged_log = "" if len(batch) == 1 else f"（合并 {len(batch)} 段）"
-            logger.info(
-                "[队列] 出队%s | 等待 %.0fs | 积压 %d | 第 %d 次尝试",
-                merged_log, queued_sec, self._backlog, attempts + 1,
-            )
+            # 出队信息不再单独打一行，并进 ASR 请求行（两者同一时刻发生）；
+            # 单消费者串行，直接放 metrics 上供引擎日志读取
+            ctx_parts = [f"等待{queued_sec:.0f}s", f"积压{self._backlog}",
+                         f"第{attempts + 1}次"]
+            if len(batch) > 1:
+                ctx_parts.insert(0, f"合并{len(batch)}段")
+            metrics.queue_ctx = " | ".join(ctx_parts)
             try:
                 done = await self.on_speech_segment(pcm, wall_iso)
             except asyncio.CancelledError:
@@ -363,6 +366,7 @@ class AudioStreamer:
                             age, self._stale_dropped, self._queue.qsize(),
                         )
                     continue
+                metrics.queue_ctx = ""  # 实时模式无出队上下文
                 res = await self.on_speech_segment(segment)
                 if res is False:
                     self._fail_total += 1

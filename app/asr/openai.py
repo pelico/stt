@@ -80,10 +80,11 @@ class OpenAISR(BaseASR):
             self.slow_ms / 1000.0, predict_s * self._slow_margin
         )
 
+        ctx = getattr(metrics, "queue_ctx", "")
         logger.info(
-            "[ASR] req#%d ASR请求 %s | 音频 %.1fs/%dKB | 预测 %.1fs(rt=%.2f)",
-            req, self._host, duration, len(pcm) // 1024,
-            predict_s, self._learned_rt,
+            "[ASR] req#%d ASR请求 %s%s | 音频 %.1fs/%dKB | 预测 %.1fs(rt=%.2f)",
+            req, f"{ctx} | " if ctx else "", self._host, duration,
+            len(pcm) // 1024, predict_s, self._learned_rt,
         )
 
         started = time.monotonic()
