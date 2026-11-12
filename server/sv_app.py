@@ -38,6 +38,7 @@ v3.2 改进（2026-11-12，可切换小模型）：
 """
 import asyncio
 import ctypes
+import glob
 import logging
 import os
 import re
@@ -103,12 +104,17 @@ def _mlock_all() -> None:
 _mlock_all()
 
 def _pick_model(directory: str, stem: str) -> str:
-    """优先取 int8 量化文件，其次 fp32；zipformer 的 decoder/joiner 无 int8。"""
-    for name in (f"{stem}.int8.onnx", f"{stem}.onnx"):
-        path = os.path.join(directory, name)
-        if os.path.exists(path):
-            return path
-    raise FileNotFoundError(f"{directory} 下找不到 {stem}(.int8).onnx")
+    """按前缀匹配 encoder/decoder/joiner（实际文件名带 epoch 版本号，如
+    encoder-epoch-99-avg-1.onnx）；优先 int8 量化文件，其次 fp32。"""
+    int8 = sorted(glob.glob(os.path.join(directory, f"{stem}*.int8.onnx")))
+    plain = [
+        p
+        for p in sorted(glob.glob(os.path.join(directory, f"{stem}*.onnx")))
+        if not p.endswith(".int8.onnx")
+    ]
+    for path in int8 + plain:
+        return path
+    raise FileNotFoundError(f"{directory} 下找不到 {stem}*.onnx")
 
 
 if SV_ASR_TYPE == "zipformer":
