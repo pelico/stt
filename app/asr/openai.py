@@ -28,6 +28,13 @@ class OpenAISR(BaseASR):
         self.read_timeout = max(5, int(settings.asr_timeout))
         self.connect_timeout = max(2, int(settings.asr_connect_timeout))
         self.slow_ms = max(1000, int(settings.asr_slow_ms))
+        # 慢请求动态预测：预计耗时 = 时长 × 实时率 + 固定开销；短音频仍受
+        # slow_ms 固定基线保护。实时率用成功请求实测值自学习（EMA 修正），
+        # 服务端变快/变慢阈值自动跟随，不用手调
+        self._slow_rt_factor = max(0.1, float(settings.asr_slow_rt_factor))
+        self._slow_overhead = max(0.0, float(settings.asr_slow_overhead_sec))
+        self._slow_margin = max(1.0, float(settings.asr_slow_margin))
+        self._learned_rt = self._slow_rt_factor  # 实测实时率的 EMA，初始=配置值
         self._endpoint = f"{self.base_url}/audio/transcriptions"
         self._host = urlsplit(self.base_url).netloc or self.base_url
         # 连接复用：识别 worker 是单消费者串行，同一时刻只有一个请求，
@@ -50,12 +57,23 @@ class OpenAISR(BaseASR):
         # 推理永不超时；服务端真死时仍由固定值 + 熔断兜底。
         read_timeout = max(self.read_timeout, int(duration * 2) + 15)
 
+        # 慢请求动态阈值：预测耗时取「配置模型」与「实测学习模型」的较大值，
+        # 再乘容差；短音频不高于固定基线 slow_ms
+        predict_cfg = duration * self._slow_rt_factor + self._slow_overhead
+        predict_learned = duration * self._learned_rt + self._slow_overhead
+        predict_s = max(predict_cfg, predict_learned)
+        slow_threshold_s = max(
+            self.slow_ms / 1000.0, predict_s * self._slow_margin
+        )
+
         logger.info(
             "[ASR] req#%d → POST %s | host=%s model=%s lang=%s "
-            "audio=%.1fs/%dKB wav=%dKB timeout=(connect %ds, read %ds)",
+            "audio=%.1fs/%dKB wav=%dKB timeout=(connect %ds, read %ds) "
+            "predict=%.1fs(rt=%.2f)",
             req, self._endpoint, self._host, self.model, self.language,
             duration, len(pcm) // 1024, len(wav) // 1024,
             self.connect_timeout, read_timeout,
+            predict_s, self._learned_rt,
         )
 
         started = time.monotonic()
@@ -78,19 +96,29 @@ class OpenAISR(BaseASR):
                 # 某些兼容服务直接返回纯文本
                 text = resp.text.strip()
 
-            slow = latency * 1000 > self.slow_ms
+            slow = latency > slow_threshold_s
+            # 自学习：用实测耗时修正实时率（扣掉固定开销后除以时长），
+            # EMA 平滑防单次抖动；限幅防止异常值把阈值带偏
+            if duration >= 1.0:
+                rt = (latency - self._slow_overhead) / duration
+                rt = min(max(rt, 0.1), 5.0)
+                self._learned_rt = 0.7 * self._learned_rt + 0.3 * rt
             metrics.record(ok=True, latency_s=latency, slow=slow, url=self._host)
             logger.info(
-                "[ASR] req#%d ✓ %.2fs (ttfb %.2fs, http %d, resp %dB) text=%d字: %s",
+                "[ASR] req#%d ✓ %.2fs (ttfb %.2fs, http %d, resp %dB, "
+                "预测 %.1fs) text=%d字: %s",
                 req, latency, ttfb, getattr(resp, "status_code", 0),
                 len(getattr(resp, "content", b"") or b""),
+                predict_s,
                 len(text), text[:80].replace("\n", " "),
             )
             if slow:
                 logger.warning(
-                    "[ASR] req#%d 慢请求 %.2fs > %.1fs：识别服务端处理过慢，"
+                    "[ASR] req#%d 慢请求 %.2fs > 预测 %.1fs×%.1f "
+                    "(音频 %.1fs, 实时率 %.2f)：识别服务端处理过慢，"
                     "查 GCP 的 CPU/swap/模型加载与 Cloudflare 回源耗时",
-                    req, latency, self.slow_ms / 1000,
+                    req, latency, predict_s, self._slow_margin,
+                    duration, self._learned_rt,
                 )
             return text
         except Exception as e:

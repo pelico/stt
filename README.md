@@ -104,7 +104,9 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `OPENAI_MODEL` | `whisper-1` | 转写模型 |
 | `ASR_TIMEOUT` | `45` | 读取超时（秒）：服务端算得慢时的等待上限 |
 | `ASR_CONNECT_TIMEOUT` | `10` | 连接超时（秒）：与读取超时分开，异常能区分「连不上」和「算得慢」 |
-| `ASR_SLOW_MS` | `10000` | 超过该毫秒数打一条「慢请求」WARNING |
+| `ASR_SLOW_MS` | `10000` | 慢请求固定基线（毫秒），仅对短音频生效 |
+| `ASR_SLOW_RT_FACTOR` / `ASR_SLOW_OVERHEAD_SEC` | `1.5` / `3.0` | 慢请求动态预测：预计耗时 = 音频时长 × 实时率 + 固定开销；实时率按成功请求实测自学习（EMA） |
+| `ASR_SLOW_MARGIN` | `1.3` | 实际耗时超过 预测值 × 该容差 才打「慢请求」WARNING |
 | `LOG_FILE_ENABLED` | `true` | 运行日志轮转落盘（页面内存缓冲重启即清空，事后排查靠文件） |
 | `LOG_FILE_PATH` | `/data/logs/stt.log` | 日志文件路径，位于持久化卷内 |
 | `LOG_FILE_MAX_MB` / `LOG_FILE_BACKUPS` | `5` / `3` | 单文件大小与保留份数 |
@@ -187,7 +189,7 @@ FastAPI → SQLite（历史，timestamp=说话时刻）+ WebSocket → 浏览器
 16:40:46 ERROR [段] 失败 | 连续 1/3 次 | 耗时 45.03s | 排队 0.2s | 积压 14 | ReadTimeout: ...
 ```
 
-直接可读：音频多大、请求了谁、连接/读取超时各设多少、等了多久、积压涨到多少、连续失败几次。**超时拆成 connect/read 两个值**后，握手失败和推理慢不会再混成一句 `Read timed out`。成功时还会打 `ttfb`（响应头到达耗时）与响应体大小；超过 `ASR_SLOW_MS` 额外打一条「慢请求」WARNING。
+直接可读：音频多大、请求了谁、连接/读取超时各设多少、等了多久、积压涨到多少、连续失败几次。**超时拆成 connect/read 两个值**后，握手失败和推理慢不会再混成一句 `Read timed out`。成功时还会打 `ttfb`（响应头到达耗时）、响应体大小与**预测耗时**。「慢请求」WARNING 用**动态阈值**判断：预计耗时 = 音频时长 × 实时率 + 固定开销（实时率按成功请求实测自学习，EMA 平滑），实际耗时超过 预测 × `ASR_SLOW_MARGIN` 才告警，短音频仍受 `ASR_SLOW_MS` 固定基线保护——长音频不再被固定 10s 阈值误报。
 
 | 错误码 | 含义 | 先查哪里 |
 |---|---|---|

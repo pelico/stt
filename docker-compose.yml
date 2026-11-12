@@ -25,9 +25,13 @@ services:
       # - ASR_MERGE_MAX_SEC=30
       # ffmpeg 轻度降噪（afftdn），老 ffmpeg 无该滤镜时自动关闭
       # - FFMPEG_DENOISE=1
-      # 诊断：连接/读取超时分开、慢请求阈值；完整日志轮转落盘 ./data/logs/stt.log
+      # 诊断：连接/读取超时分开、慢请求阈值（短音频固定基线 + 长音频按
+      # 时长动态预测并自学习）；完整日志轮转落盘 ./data/logs/stt.log
       # - ASR_CONNECT_TIMEOUT=10
       # - ASR_SLOW_MS=10000
+      # - ASR_SLOW_RT_FACTOR=1.5
+      # - ASR_SLOW_OVERHEAD_SEC=3.0
+      # - ASR_SLOW_MARGIN=1.3
       # - LOG_FILE_ENABLED=true
       # 被过滤音频留证（调试用）
       # - SAVE_REJECTED_AUDIO=true

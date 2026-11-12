@@ -36,8 +36,18 @@ class Settings(BaseSettings):
     # 连接阶段超时（秒）：与读取超时分开，异常就能区分「连不上」和「算得慢」
     asr_connect_timeout: int = 10
 
-    # 超过该毫秒数视为慢请求，额外打一条 WARNING（含耗时与排查方向）
+    # 超过该毫秒数视为慢请求，额外打一条 WARNING（含耗时与排查方向）。
+    # 仅作为短音频的固定基线；长音频按下方动态预测模型判断
     asr_slow_ms: int = 10000
+
+    # 慢请求动态预测：预计耗时 = 音频时长 × 实时率系数 + 固定开销（秒）。
+    # 实时率 1.5 对应 SenseVoice 小机推理（1~1.5 倍实时）；固定开销含
+    # CF 两跳 + WAV 上传 + 服务端排队。每次成功请求会用实测耗时自学习
+    # 修正实时率（EMA），服务端变快/变慢自动跟随
+    asr_slow_rt_factor: float = 1.5
+    asr_slow_overhead_sec: float = 3.0
+    # 容差倍数：实际耗时超过 预测值 × 该倍数 才判定为慢
+    asr_slow_margin: float = 1.3
 
     # 运行日志落盘：排查超时往往是事后，页面内存缓冲重启即清空
     log_file_enabled: bool = True
