@@ -35,6 +35,17 @@ class OpenAISR(BaseASR):
         self._slow_overhead = max(0.0, float(settings.asr_slow_overhead_sec))
         self._slow_margin = max(1.0, float(settings.asr_slow_margin))
         self._learned_rt = self._slow_rt_factor  # 实测实时率的 EMA，初始=配置值
+
+    def _predict(self, duration: float) -> float:
+        """预计总耗时 = 时长 × 实时率 + 固定开销。
+
+        取「配置模型」与「实测学习模型」的较大值：学习结果只抬高预测
+        不降低（服务端偶尔的快请求不会把阈值拉得过敏感）。慢请求告警
+        与读超时共用本预测，保证「先告警、后超时」的次序不倒挂。
+        """
+        predict_cfg = duration * self._slow_rt_factor + self._slow_overhead
+        predict_learned = duration * self._learned_rt + self._slow_overhead
+        return max(predict_cfg, predict_learned)
         self._endpoint = f"{self.base_url}/audio/transcriptions"
         self._host = urlsplit(self.base_url).netloc or self.base_url
         # 连接复用：识别 worker 是单消费者串行，同一时刻只有一个请求，
@@ -51,17 +62,20 @@ class OpenAISR(BaseASR):
         if self.language != "auto":
             data["language"] = self.language
 
-        # 读超时按音频时长自适应：SenseVoice 推理约 1~1.5 倍实时，固定 45s
+        # 读超时同样走动态预测：SenseVoice 推理约 1~1.5 倍实时，固定 45s
         # 会被 30s 合并块（推理 30~45s）误杀——超时→重试→服务端单 worker
-        # 排队→更慢→再超时，形成活锁。max(固定值, 时长×2+15) 保证正常
-        # 推理永不超时；服务端真死时仍由固定值 + 熔断兜底。
-        read_timeout = max(self.read_timeout, int(duration * 2) + 15)
+        # 排队→更慢→再超时，形成活锁。现在超时 = 预测耗时 × 容差 + 10s 余量，
+        # 与慢请求告警共用同一个预测器：告警阈值之下仍能拿到结果（慢但成功），
+        # 超过告警阈值还有 10s 宽限再放弃；服务端整体变慢时实测学习的实时率
+        # 抬高预测，超时跟着放宽，不会退化成固定公式。服务端真死时仍由
+        # 固定下限 + 熔断兜底。
+        read_timeout = max(
+            self.read_timeout,
+            int(self._predict(duration) * self._slow_margin) + 10,
+        )
 
-        # 慢请求动态阈值：预测耗时取「配置模型」与「实测学习模型」的较大值，
-        # 再乘容差；短音频不高于固定基线 slow_ms
-        predict_cfg = duration * self._slow_rt_factor + self._slow_overhead
-        predict_learned = duration * self._learned_rt + self._slow_overhead
-        predict_s = max(predict_cfg, predict_learned)
+        # 慢请求告警阈值：短音频不高于固定基线 slow_ms
+        predict_s = self._predict(duration)
         slow_threshold_s = max(
             self.slow_ms / 1000.0, predict_s * self._slow_margin
         )

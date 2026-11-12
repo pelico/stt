@@ -151,6 +151,10 @@ SV_MAX_PENDING = max(1, int(os.environ.get("SV_MAX_PENDING", "3")))
 _pending = 0
 _pending_lock = threading.Lock()
 
+# 自测实时率（推理耗时 / 音频时长）的 EMA，暴露在 /health 里，
+# 供客户端校准 ASR_SLOW_RT_FACTOR；也方便观察 swap 抖动对推理的影响
+_rt_ema = {"v": 0.0, "n": 0}
+
 TAG_RE = re.compile(r"<\|[^|]*\|>")
 PUNCT_RE = re.compile(r"[\s，。！？、,.!?~…:：;；\"'“”‘’()（）\-—_/\\|]+")
 FILLER_CHARS = set("嗯啊哦呃唉哎呵哈嘿唔噢喂呀呐呗嘛额呣嘻嘘咯喽嘞")
@@ -178,7 +182,13 @@ def list_models():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "workers": SV_WORKERS, "asr_type": ASR_TYPE}
+    return {
+        "status": "ok",
+        "workers": SV_WORKERS,
+        "asr_type": ASR_TYPE,
+        "pending": _pending,
+        "rt_factor": round(_rt_ema["v"], 2) if _rt_ema["n"] else None,
+    }
 
 
 def _to_wav16k(src: str) -> str:
@@ -267,9 +277,18 @@ def _transcribe_sync(src: str) -> str:
         stream.accept_waveform(rate, samples)
         recognizer.decode_stream(stream)
         raw = (stream.result.text or "").strip()
+    infer_s = time.monotonic() - started
+    dur_s = samples.size / rate if rate else 0.0
+    if dur_s >= 1.0:
+        rt = infer_s / dur_s
+        prev = _rt_ema["v"]
+        _rt_ema["v"] = 0.7 * prev + 0.3 * rt if _rt_ema["n"] else rt
+        _rt_ema["n"] += 1
     logger.info(
-        "推理 %.2fs | %dB 音频 | raw=%r",
-        time.monotonic() - started, samples.size * 2, raw,
+        "推理 %.2fs | 音频 %.1fs (rt=%.2f, ema=%.2f) | %dB | raw=%r",
+        infer_s, dur_s,
+        infer_s / dur_s if dur_s else 0.0, _rt_ema["v"],
+        samples.size * 2, raw,
     )
 
     tags = [t[2:-2] for t in TAG_RE.findall(raw)]
