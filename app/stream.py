@@ -185,6 +185,9 @@ class AudioStreamer:
 
     def restart(self):
         """立即中断当前拉流，用新配置重连。"""
+        # 换了新地址重连：旧的连续失败与新地址无关，退避计数归零，
+        # 否则换地址后第一次尝试失败就按上次的指数退避等 40~60 秒
+        self._fail_streak = 0
         self._restart.set()
         self._kill_proc()
 
