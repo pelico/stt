@@ -27,6 +27,14 @@ v3.1 改进（2026-11-12，针对 1G 内存小机的 swap 抖动）：
   2. WAV 快路径：rtsp-stt 客户端发的本来就是 16kHz 单声道 s16le WAV，
      直接用 wave 模块读取，跳过每次请求的 ffmpeg 转码子进程（内存尖峰
      源头之一）；只有非该格式的输入才走 ffmpeg。
+
+v3.2 改进（2026-11-12，可切换小模型）：
+  SV_ASR_TYPE=sensevoice（默认）| zipformer：
+  - zipformer 用 sherpa-onnx-streaming-zipformer-small-bilingual-zh-en
+    （int8 总体积 ~90MB，RSS 峰值 ~150-250MB），中英双语，推理更快；
+    流式模型按「整段一次性喂入 + input_finished」的方式当离线用。
+  - 准确率比 SenseVoice 降一档，且输出无标点；安静清晰语音差距不大，
+    嘈杂场景误识会增多。SV_ASR_TYPE=sensevoice 随时切回。
 """
 import asyncio
 import ctypes
@@ -50,6 +58,13 @@ logger = logging.getLogger("sensevoice")
 MODEL_DIR = os.environ.get(
     "SV_MODEL_DIR",
     "/home/administrator/sensevoice/models/sherpa-onnx-sense-voice-zh-en-ja-yue-2024-07-17",
+)
+# 识别引擎：sensevoice（默认，最准）| zipformer（小模型，省内存）
+SV_ASR_TYPE = os.environ.get("SV_ASR_TYPE", "sensevoice").lower()
+ZIPFORMER_DIR = os.environ.get(
+    "SV_ZIPFORMER_DIR",
+    "/home/administrator/sensevoice/models/"
+    "sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16",
 )
 # 中文场景固定 zh；设为空字符串恢复自动语种
 SV_LANGUAGE = os.environ.get("SV_LANGUAGE", "zh")
@@ -87,13 +102,37 @@ def _mlock_all() -> None:
 
 _mlock_all()
 
-recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
-    model=os.path.join(MODEL_DIR, "model.int8.onnx"),
-    tokens=os.path.join(MODEL_DIR, "tokens.txt"),
-    use_itn=True,
-    language=SV_LANGUAGE,
-    num_threads=1,
-)
+def _pick_model(directory: str, stem: str) -> str:
+    """优先取 int8 量化文件，其次 fp32；zipformer 的 decoder/joiner 无 int8。"""
+    for name in (f"{stem}.int8.onnx", f"{stem}.onnx"):
+        path = os.path.join(directory, name)
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(f"{directory} 下找不到 {stem}(.int8).onnx")
+
+
+if SV_ASR_TYPE == "zipformer":
+    # 流式 transducer 模型按离线用法：整段喂入 + input_finished，一次出全句
+    recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+        encoder=_pick_model(ZIPFORMER_DIR, "encoder"),
+        decoder=_pick_model(ZIPFORMER_DIR, "decoder"),
+        joiner=_pick_model(ZIPFORMER_DIR, "joiner"),
+        tokens=os.path.join(ZIPFORMER_DIR, "tokens.txt"),
+        num_threads=1,
+        sample_rate=16000,
+        decoding_method="modified_beam_search",
+    )
+    ASR_TYPE = "zipformer"
+else:
+    recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+        model=os.path.join(MODEL_DIR, "model.int8.onnx"),
+        tokens=os.path.join(MODEL_DIR, "tokens.txt"),
+        use_itn=True,
+        language=SV_LANGUAGE,
+        num_threads=1,
+    )
+    ASR_TYPE = "sensevoice"
+logger.info("ASR 引擎: %s", ASR_TYPE)
 # 每个线程完整跑「ffmpeg 转码 + 读样本 + 推理」，互不共享可变状态
 _pool = ThreadPoolExecutor(max_workers=SV_WORKERS, thread_name_prefix="asr")
 
@@ -124,7 +163,7 @@ def list_models():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "workers": SV_WORKERS}
+    return {"status": "ok", "workers": SV_WORKERS, "asr_type": ASR_TYPE}
 
 
 def _to_wav16k(src: str) -> str:
@@ -201,10 +240,18 @@ def _transcribe_sync(src: str) -> str:
         return ""
 
     started = time.monotonic()
-    stream = recognizer.create_stream()
-    stream.accept_waveform(rate, samples)
-    recognizer.decode_stream(stream)
-    raw = (stream.result.text or "").strip()
+    if ASR_TYPE == "zipformer":
+        stream = recognizer.create_stream()
+        stream.accept_waveform(rate, samples)
+        stream.input_finished()
+        while recognizer.is_ready(stream):
+            recognizer.decode_stream(stream)
+        raw = (recognizer.get_result(stream) or "").strip()
+    else:
+        stream = recognizer.create_stream()
+        stream.accept_waveform(rate, samples)
+        recognizer.decode_stream(stream)
+        raw = (stream.result.text or "").strip()
     logger.info(
         "推理 %.2fs | %dB 音频 | raw=%r",
         time.monotonic() - started, samples.size * 2, raw,
