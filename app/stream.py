@@ -575,7 +575,8 @@ class AudioStreamer:
         # -rtsp_transport 是 RTSP demuxer 专属选项，喂给 HLS/HTTP 流会报
         # "Option not found" 连输入都打不开；只对 rtsp:// 地址传入
         low_url = url.strip().lower()
-        if low_url.startswith("rtsp://") or low_url.startswith("rtsps://"):
+        is_rtsp = low_url.startswith("rtsp://") or low_url.startswith("rtsps://")
+        if is_rtsp:
             cmd += ["-rtsp_transport", "tcp"]
         else:
             # RTSP/直播流数据按实时到达；点播类源（HTTP/HLS 影片、本地文件）
@@ -587,9 +588,11 @@ class AudioStreamer:
         # ffmpeg 不支持该选项时由 _log_ffmpeg_line 自动置 False 降级
         if self._rw_timeout_ok:
             cmd += ["-rw_timeout", str(timeout_sec * 1_000_000)]
-        if self._wallclock_ok:
-            # 部分摄像头 RTP 时间戳不前进/跳变，用墙钟时间戳 + genpts 保证单调，
-            # 否则 s16le muxer 每包刷 "non monotonically increasing dts" 告警
+        if self._wallclock_ok and is_rtsp:
+            # 仅 RTSP 需要：部分摄像头 RTP 时间戳不前进/跳变，用墙钟时间戳 +
+            # genpts 保证单调，否则 s16le muxer 刷 "non monotonically
+            # increasing dts"。HLS/TS 自带正规 PTS，绝不能用 wallclock——
+            # 它把时间戳改写成到达墙钟，-re 拿自我参照的时钟节流 = 失效
             cmd += ["-use_wallclock_as_timestamps", "1", "-fflags", "+genpts"]
         cmd += ["-i", url, "-vn"]
         filters = []
