@@ -141,6 +141,30 @@
     transition: width 0.1s linear;
   }
   .vad-stats { white-space: nowrap; }
+  /* 能量门限快捷滑块：换音源时免开设置页直接调 */
+  .vad-quick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px 8px;
+    border-bottom: 1px solid #334155;
+    font-size: 11px;
+    color: #94a3b8;
+  }
+  .vad-quick label { white-space: nowrap; cursor: default; }
+  .vad-quick input[type=range] {
+    flex: 1;
+    min-width: 0;
+    accent-color: #3b82f6;
+  }
+  .vad-quick .vad-quick-val {
+    white-space: nowrap;
+    color: #60a5fa;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    min-width: 64px;
+    text-align: right;
+  }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -423,6 +447,7 @@
       line-height: 1.6;
     }
     .vad-bar { padding: 8px 10px; }
+    .vad-quick { padding: 6px 10px 8px; }
     .live-content, .history-search { padding: 8px 10px; }
     .live-item, .history-item { padding-left: 10px; padding-right: 10px; }
     .live-item .text { font-size: 15px; }
@@ -470,6 +495,11 @@
       <span class="vad-badge" id="vad-badge">静音</span>
       <div class="vad-meter"><div class="vad-meter-fill" id="vad-level"></div></div>
       <span class="vad-stats" id="vad-stats">切段 0 · 入队 0 · 出队 0</span>
+    </div>
+    <div class="vad-quick">
+      <label for="live_rms" title="拖动松手立即生效，无需重启；拾音偏少往右调（更灵敏），噪声误切往左调（更严格）">能量门限</label>
+      <input type="range" id="live_rms" min="-80" max="-10" step="1" />
+      <span class="vad-quick-val" id="live_rms_val">-45 dBFS</span>
     </div>
     <div class="main-diag" id="main-diag">诊断摘要加载中…</div>
     <div id="live-content" class="live-content">
@@ -1018,6 +1048,31 @@ function syncVadLabels() {
   document.getElementById('merge_max_val').textContent = document.getElementById('asr_merge_max_sec').value + ' s';
 }
 
+/* ---------- 能量门限快捷滑块（实时面板） ---------- */
+const liveRms = document.getElementById('live_rms');
+const liveRmsVal = document.getElementById('live_rms_val');
+liveRms.addEventListener('input', () => {
+  liveRmsVal.textContent = liveRms.value + ' dBFS';
+});
+liveRms.addEventListener('change', async () => {
+  const value = parseInt(liveRms.value, 10);
+  try {
+    const res = await apiFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vad_rms_dbfs: value }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '保存失败');
+    // 同步设置抽屉里的同一个配置项，两边不串
+    document.getElementById('vad_rms_dbfs').value = value;
+    document.getElementById('rms_val').textContent = value + ' dBFS';
+    showToast(`能量门限 ${value} dBFS 已生效`);
+  } catch (e) {
+    showToast(e.message, true);
+  }
+});
+
 async function loadRtspHistory() {
   const sel = document.getElementById('rtsp-history-select');
   try {
@@ -1078,6 +1133,9 @@ async function loadSettings() {
 
   document.getElementById('vad_mode').value = v.vad_mode;
   document.getElementById('vad_rms_dbfs').value = v.vad_rms_dbfs;
+  // 实时面板的快捷滑块与设置页保持一致
+  document.getElementById('live_rms').value = v.vad_rms_dbfs;
+  document.getElementById('live_rms_val').textContent = v.vad_rms_dbfs + ' dBFS';
   document.getElementById('vad_frame_ms').value = v.vad_frame_ms;
   document.getElementById('vad_silence_frames').value = v.vad_silence_frames;
   document.getElementById('vad_min_speech_frames').value = v.vad_min_speech_frames;
