@@ -1,0 +1,5 @@
+# 容器内脚本与 CI 文件必须是 LF（CRLF 会让 entrypoint.sh 在容器里报 /bin/sh^M）
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
