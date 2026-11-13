@@ -1,0 +1,26 @@
+services:
+  stt-server:
+    # GHCR 多架构镜像（amd64 / arm64 / armv7），docker compose pull 自动匹配架构
+    # 不想走 CI 也可以本地构建：docker compose up -d --build
+    image: ghcr.io/pelico/stt-server:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8010:8010"
+    volumes:
+      - ./models:/data/models
+    environment:
+      # 引擎选择：zipformer（~90MB，1GB 内存设备首选，无标点）
+      #            sensevoice（~500MB，更准有标点，内存 ≥2GB 再用）
+      SV_ASR_TYPE: "zipformer"
+      # 并发推理线程数：1GB 设备 1；≥2GB 且多核可加到 2
+      SV_WORKERS: "1"
+      # 排队上限，满则回 503 快速拒绝（防客户端超时重试堆死）
+      SV_MAX_PENDING: "3"
+      # 容器内禁用 mlockall（小内存机已验证会触发内核回收风暴）
+      SV_MLOCK: "0"
+      SV_LANGUAGE: zh
+      SV_ZIPFORMER_DIR: /data/models/sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16
+      SV_MODEL_DIR: /data/models/sherpa-onnx-sense-voice-zh-en-ja-yue-2024-07-17
+    restart: unless-stopped
