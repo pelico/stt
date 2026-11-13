@@ -107,8 +107,10 @@ class OpenAISR(BaseASR):
 
             slow = latency > slow_threshold_s
             # 自学习：用实测耗时修正实时率（扣掉固定开销后除以时长），
-            # EMA 平滑防单次抖动；限幅防止异常值把阈值带偏
-            if duration >= 1.0:
+            # EMA 平滑防单次抖动；限幅防止异常值把阈值带偏。
+            # 3s 以下的片段扣掉固定开销后比例失真（rt 会被拖到下限），
+            # 不参与学习
+            if duration >= 3.0:
                 rt = (latency - self._slow_overhead) / duration
                 rt = min(max(rt, 0.1), 5.0)
                 self._learned_rt = 0.7 * self._learned_rt + 0.3 * rt

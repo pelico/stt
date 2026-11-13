@@ -637,6 +637,9 @@ class AudioStreamer:
         preroll = b""
         preroll_limit = 0
         tail_pad_frames = 0
+        # 最近 1.5s 的帧电平：强制切段时在窗口内找最安静的一帧下刀，
+        # 避免把一个字切成两半（BGM/持续噪声会让 VAD 永不断句）
+        recent_levels = []
 
         loop = asyncio.get_event_loop()
         last_emit = 0.0
@@ -693,9 +696,48 @@ class AudioStreamer:
                         in_speech = True
                         speech_frames = 0
                         speech_buffer = preroll[-preroll_limit:]
+                        recent_levels = []
                     speech_buffer += frame
                     speech_frames += 1
                     silence_count = 0
+                    recent_levels.append(level)
+                    lookback = max(1, 1500 // max(1, frame_ms))
+                    if len(recent_levels) > lookback:
+                        recent_levels.pop(0)
+
+                    # 硬上限只在静音分支检查时，BGM/持续噪声会让 VAD 永远
+                    # 判「语音」，缓冲无限涨（实测单段 100s+，超过 CF 100s
+                    # 回源超时必然 524）。语音分支同样检查，满 30s 强制切段：
+                    # 在最近 1.5s 里找最安静的一帧下刀，切点接近自然停顿。
+                    forced = (
+                        len(speech_buffer)
+                        > MAX_SEGMENT_SEC * self.sample_rate * 2
+                    )
+                    if forced:
+                        cut_frames = 0
+                        if len(recent_levels) >= 2:
+                            quiet_idx = min(
+                                range(len(recent_levels)),
+                                key=lambda i: recent_levels[i],
+                            )
+                            cut_frames = len(recent_levels) - 1 - quiet_idx
+                        cut_bytes = cut_frames * frame_bytes
+                        head = speech_buffer[:-cut_bytes] if cut_bytes else speech_buffer
+                        tail = speech_buffer[len(head):]
+                        duration_ms = int(len(head) / (self.sample_rate * 2) * 1000)
+                        self._segments += 1
+                        self._last_duration_ms = duration_ms
+                        logger.info(
+                            "语音段超过 %ds，强制切段: %.1fs（回退 %.1fs 找静音帧下刀）",
+                            MAX_SEGMENT_SEC, duration_ms / 1000,
+                            cut_frames * frame_ms / 1000,
+                        )
+                        await self._enqueue(head)
+                        # 剩余部分作为新段继续收音，补 preroll 防吞字头
+                        speech_buffer = preroll[-preroll_limit:] + tail
+                        speech_frames -= cut_frames
+                        silence_count = 0
+                        recent_levels = []
                 elif in_speech:
                     silence_count += 1
                     speech_buffer += frame
