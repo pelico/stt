@@ -814,16 +814,21 @@ const logPauseBtn = document.getElementById('log-pause');
 const ENGINE_LABELS = { aliyun: '阿里云', tencent: '腾讯云', openai: 'OpenAI 兼容' };
 const SECRET_FIELDS = ['dashscope_api_key', 'tencent_secret_id', 'tencent_secret_key', 'openai_api_key'];
 
-/* 可选访问口令：首次用 ?token=xxx 打开页面即记住，后续请求与 WS 自动带上 */
-const urlToken = new URLSearchParams(location.search).get('token');
-if (urlToken) localStorage.setItem('stt_token', urlToken);
+/* 访问口令：正常走登录 Cookie（浏览器自动携带）；X-Access-Token 仅兼容旧脚本 */
 function apiFetch(url, opts = {}) {
   const token = localStorage.getItem('stt_token') || '';
   const headers = new Headers(opts.headers || {});
   if (token) headers.set('X-Access-Token', token);
-  return fetch(url, { ...opts, headers });
+  return fetch(url, { ...opts, headers }).then(res => {
+    if (res.status === 401) {
+      location.replace('/login?next=' + encodeURIComponent(location.pathname + location.search));
+      throw new Error('登录已过期');
+    }
+    return res;
+  });
 }
 function wsToken() {
+  // WebSocket 优先用会话 Cookie（同源握手自动带上），token 仅兜底旧部署
   const token = localStorage.getItem('stt_token') || '';
   return token ? `?token=${encodeURIComponent(token)}` : '';
 }

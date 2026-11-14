@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 · 语音字幕</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .card {
+      width: min(360px, 88vw);
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 32px 28px;
+      box-shadow: 0 10px 40px rgba(0,0,0,.4);
+    }
+    h1 { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+    p.hint { font-size: 12px; color: #94a3b8; margin-bottom: 22px; }
+    label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+    input[type=password] {
+      width: 100%;
+      padding: 11px 12px;
+      font-size: 16px; /* ≥16px，避免 iOS 聚焦缩放 */
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #e2e8f0;
+      outline: none;
+    }
+    input[type=password]:focus { border-color: #3b82f6; }
+    button {
+      width: 100%;
+      margin-top: 18px;
+      padding: 11px;
+      font-size: 15px;
+      font-weight: 600;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: .6; cursor: default; }
+    .err {
+      display: none;
+      margin-top: 14px;
+      padding: 9px 12px;
+      font-size: 12px;
+      background: #450a0a;
+      color: #fecaca;
+      border-radius: 8px;
+    }
+    .err.show { display: block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>语音字幕</h1>
+    <p class="hint">请输入访问口令，30 天内免登录</p>
+    <form id="form" method="post" action="javascript:void(0)">
+      <label for="password">口令</label>
+      <input type="password" id="password" autocomplete="current-password" autofocus>
+      <button id="btn" type="submit">进 入</button>
+      <div class="err" id="err"></div>
+    </form>
+  </div>
+  <script>
+    const errBox = document.getElementById('err');
+    const btn = document.getElementById('btn');
+    const params = new URLSearchParams(location.search);
+    const next = params.get('next');
+    // 只允许站内路径，防 open-redirect
+    const target = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+
+    async function submit() {
+      const password = document.getElementById('password').value;
+      if (!password) return;
+      btn.disabled = true;
+      errBox.classList.remove('show');
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          // 旧版 ?token= 注入的 localStorage 残留清掉，统一走 Cookie
+          localStorage.removeItem('stt_token');
+          location.replace(target);
+          return;
+        }
+        errBox.textContent = data.detail || '登录失败';
+        errBox.classList.add('show');
+      } catch (e) {
+        errBox.textContent = '网络错误，请重试';
+        errBox.classList.add('show');
+      } finally {
+        btn.disabled = false;
+        document.getElementById('password').focus();
+      }
+    }
+    document.getElementById('form').addEventListener('submit', submit);
+  </script>
+</body>
+</html>

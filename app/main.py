@@ -10,10 +10,12 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from urllib.parse import quote
 from fastapi.staticfiles import StaticFiles
 
 from app.audio_dump import dump_rejected
+from app.auth import COOKIE_NAME, make_token, password_matches, verify_token
 from app.config import settings
 from app.database import (
     init_db, save_transcript, list_transcripts, count_transcripts, iso_utc,
@@ -70,6 +72,29 @@ _setup_file_logging()
 
 # 可选访问口令：空表示不启用（兼容原有部署）
 ACCESS_TOKEN = (settings.access_token or "").strip()
+
+# 登录失败限速：防止公网暴力试口令（全局计数，个人服务够用）
+_login_fails = 0
+_login_locked_until = 0.0
+LOGIN_FAIL_LIMIT = 8
+LOGIN_LOCK_SEC = 300
+
+# 登录页与登录接口之外全部需要会话；/api/health 保持开放便于探活
+PUBLIC_PATHS = ("/login", "/api/login", "/api/health", "/favicon.ico")
+
+
+def _set_session_cookie(response, password: str, request: Request):
+    """签发会话 Cookie。经 HTTPS（CF 代理）访问时加 Secure。"""
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    response.set_cookie(
+        COOKIE_NAME,
+        make_token(password),
+        max_age=30 * 24 * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=(proto == "https"),
+        path="/",
+    )
 
 
 class WSClient:
@@ -357,16 +382,78 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.middleware("http")
 async def access_guard(request: Request, call_next):
-    """可选口令保护 /api/*；静态页面公开，便于用 ?token= 注入口令。"""
-    if ACCESS_TOKEN and request.url.path.startswith("/api/"):
-        supplied = (
-            request.headers.get("x-access-token")
-            or request.query_params.get("token")
-            or ""
+    """登录保护：未登录时页面跳 /login、API 回 401。
+
+    兼容旧用法：X-Access-Token 头或 ?token= 仍被接受（口令正确时
+    顺手把会话 Cookie 签上，老书签/老脚本不断档）。
+    """
+    path = request.url.path
+    if not ACCESS_TOKEN or path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    supplied_token = (
+        request.headers.get("x-access-token")
+        or request.query_params.get("token")
+        or ""
+    )
+    if password_matches(supplied_token, ACCESS_TOKEN):
+        response = await call_next(request)
+        _set_session_cookie(response, ACCESS_TOKEN, request)
+        return response
+
+    cookie = request.cookies.get(COOKIE_NAME) or ""
+    if verify_token(cookie, ACCESS_TOKEN):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    # 页面请求跳登录页，next 用于登录后回跳
+    return RedirectResponse(f"/login?next={quote(path, safe='')}", status_code=307)
+
+
+@app.post("/api/login")
+async def login(request: Request):
+    """口令登录，成功签发会话 Cookie。"""
+    global _login_fails, _login_locked_until
+    now = time.monotonic()
+    if now < _login_locked_until:
+        return JSONResponse(
+            {"detail": "尝试次数过多，请稍后再试"},
+            status_code=429,
+            headers={"Retry-After": str(int(_login_locked_until - now))},
         )
-        if supplied != ACCESS_TOKEN:
-            return JSONResponse({"detail": "unauthorized"}, status_code=401)
-    return await call_next(request)
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    if not password_matches(str(body.get("password") or ""), ACCESS_TOKEN):
+        _login_fails += 1
+        if _login_fails >= LOGIN_FAIL_LIMIT:
+            _login_locked_until = time.monotonic() + LOGIN_LOCK_SEC
+            _login_fails = 0
+            logger.warning("口令连续错误 %d 次，锁定 %d 秒", LOGIN_FAIL_LIMIT, LOGIN_LOCK_SEC)
+        return JSONResponse({"detail": "口令错误"}, status_code=401)
+    _login_fails = 0
+    response = JSONResponse({"ok": True})
+    _set_session_cookie(response, ACCESS_TOKEN, request)
+    logger.info("登录成功（%s）", request.client.host if request.client else "-")
+    return response
+
+
+@app.post("/api/logout")
+async def logout():
+    """清除会话。"""
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return response
+
+
+@app.get("/login")
+async def login_page():
+    return FileResponse(
+        os.path.join(static_dir, "login.html"),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/")
@@ -485,12 +572,17 @@ async def health():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     if ACCESS_TOKEN:
+        # 会话 Cookie（同源 WS 握手自动携带）或兼容旧的 ?token= 口令
+        cookie = ws.cookies.get(COOKIE_NAME) or ""
         supplied = (
             ws.query_params.get("token")
             or ws.headers.get("x-access-token")
             or ""
         )
-        if supplied != ACCESS_TOKEN:
+        if not (
+            verify_token(cookie, ACCESS_TOKEN)
+            or password_matches(supplied, ACCESS_TOKEN)
+        ):
             await ws.close(code=4401)
             return
 

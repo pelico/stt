@@ -220,13 +220,16 @@ docker exec rtsp-stt sh -c "grep -E 'read_timeout|慢请求|熔断' /data/logs/s
 
 ## 访问口令（可选）
 
-设置 `ACCESS_TOKEN` 后，`/api/*` 与 `/ws` 都需要口令，避免同网段的人读到含账密的 RTSP 地址、改引擎把音频转走。
+设置 `ACCESS_TOKEN` 后全站需要登录，避免同网段或公网的人读到含账密的 RTSP 地址、改引擎把音频转走。
 
 1. compose 里加 `- ACCESS_TOKEN=your-secret`，重启容器
-2. 首次用 `http://<设备IP>:8000/?token=your-secret` 打开页面，口令会存进浏览器 localStorage
-3. 之后所有请求与 WebSocket 自动带口令，直接访问正常地址即可
+2. 浏览器打开任意页面都会跳到登录页，输入口令即签发 30 天有效的会话 Cookie（HttpOnly，JS 读不到）
+3. 登录后所有页面、`/api/*`、WebSocket 全部放行；口令变更后旧会话立即失效
+4. 防暴力破解：连续错 8 次锁 5 分钟
 
-**不设置该变量时行为与旧版完全一致**，不会影响现有部署。注意这只是一道轻量访问控制，若要公网暴露请再加反向代理的 HTTPS 与认证。
+**兼容旧用法**：`?token=your-secret` 或 `X-Access-Token` 头仍被接受（脚本/老书签不断档），口令正确时自动升级为 Cookie 会话。
+
+**不设置该变量时行为与旧版完全一致**，不会影响现有部署。注意这只是应用层的一道轻量访问控制，若要公网暴露请保留反向代理的 HTTPS。
 
 ## 自行构建
 
