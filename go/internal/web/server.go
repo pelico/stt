@@ -447,7 +447,18 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTranscripts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodDelete:
+		if err := s.history.Clear(); err != nil {
+			writeJSON(w, 500, map[string]any{"detail": err.Error()})
+			return
+		}
+		s.log("INFO", "已清空识别历史")
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	case http.MethodGet:
+		// handled below
+	default:
 		writeJSON(w, 405, map[string]any{"detail": "method not allowed"})
 		return
 	}

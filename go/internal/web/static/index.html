@@ -57,9 +57,14 @@
         <div class="card-head"><h2>识别历史</h2><span class="sub" id="history-total">0 条</span></div>
         <div class="search-row">
           <input type="text" id="search" placeholder="搜索历史字幕…">
-          <button class="btn" id="history-more">加载更多</button>
+          <button class="btn sm danger" id="history-clear" title="清空全部识别历史">清空</button>
         </div>
         <div id="history-list"><div style="color:var(--muted);font-size:13px">暂无记录</div></div>
+        <div class="pager" id="history-pager">
+          <button class="btn sm" id="history-prev">上一页</button>
+          <span class="page-info" id="history-page">1 / 1</span>
+          <button class="btn sm" id="history-next">下一页</button>
+        </div>
       </section>
     </main>
 

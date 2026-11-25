@@ -6,7 +6,7 @@ const fmtTime = ts => { if (!ts) return ''; const d = new Date(ts.length === 19 
 const fmtLag = s => s == null ? '—' : s < 60 ? Math.round(s)+'s' : s < 3600 ? Math.round(s/60)+'m' : (s/3600).toFixed(1)+'h';
 
 let ws = null, listening = false, liveItems = 0, logAfter = 0, logPaused = false, logTimer = null;
-let settingsCache = null, historyLimit = 100, historyKeyword = '';
+let settingsCache = null, historyPage = 1, historyPageSize = 20, historyTotal = 0, historyKeyword = '';
 let audioCtx = null, audioBuf = [], audioPlaying = false, audioStarted = false, nextPlayTime = 0;
 const AUDIO_SR = 16000, AUDIO_CHUNK = 1920, AUDIO_PREROLL = 6400;
 
@@ -58,13 +58,18 @@ function onTranscript(m) {
   const div = document.createElement('div');
   div.className = 'line new';
   div.innerHTML = `<span class="time">${esc(fmtTime(m.timestamp))}</span><span class="text">${esc(m.text)}</span><span class="tag">${esc(m.duration_sec||0)}s</span>`;
-  box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
+  // newest first: prepend instead of append, keep viewport at top
+  box.insertBefore(div, box.firstChild);
+  box.scrollTop = 0;
   liveItems++; $('live-count').textContent = liveItems+' 条';
   setTimeout(()=>div.classList.remove('new'), 1500);
-  const h = $('history-list');
-  if (h.querySelector('[style]') && h.innerText.includes('暂无')) h.innerHTML = '';
-  h.insertAdjacentHTML('afterbegin', transcriptItem(m));
+  // keep the history panel in sync only when viewing the newest page unfiltered
+  if (historyPage === 1 && !historyKeyword) {
+    const h = $('history-list');
+    if (h.innerText.includes('暂无')) h.innerHTML = '';
+    h.insertAdjacentHTML('afterbegin', transcriptItem(m));
+    while (h.children.length > historyPageSize) h.removeChild(h.lastChild);
+  }
 }
 
 function transcriptItem(m) {
@@ -109,13 +114,29 @@ async function fetchHealth() {
 }
 
 async function loadHistory(reset=false) {
-  if (reset) { historyLimit = 100; }
+  if (reset) { historyPage = 1; }
   try {
-    const d = await api(`/api/transcripts?limit=${historyLimit}&offset=0&keyword=${encodeURIComponent(historyKeyword)}`);
-    $('history-total').textContent = d.total+' 条';
+    const offset = (historyPage-1)*historyPageSize;
+    const d = await api(`/api/transcripts?limit=${historyPageSize}&offset=${offset}&keyword=${encodeURIComponent(historyKeyword)}`);
+    historyTotal = d.total || 0;
+    const pages = Math.max(1, Math.ceil(historyTotal/historyPageSize));
+    if (historyPage > pages) { historyPage = pages; return loadHistory(); }
+    $('history-total').textContent = historyTotal+' 条';
     $('history-list').innerHTML = d.items.length ? d.items.map(transcriptItem).join('') : '<div style="color:var(--muted);font-size:13px">暂无记录</div>';
-    $('history-more').style.display = d.total > historyLimit ? '' : 'none';
+    $('history-page').textContent = historyPage+' / '+pages;
+    $('history-prev').disabled = historyPage <= 1;
+    $('history-next').disabled = historyPage >= pages;
   } catch(e) {}
+}
+
+async function clearHistory() {
+  if (!confirm('确定清空全部识别历史？此操作不可撤销。')) return;
+  try {
+    await api('/api/transcripts', {method:'DELETE'});
+    historyPage = 1;
+    await loadHistory(true);
+    toast('识别历史已清空');
+  } catch(e) { toast('清空失败：'+(e.message||'未知错误')); }
 }
 
 function toggleListen() {
@@ -318,7 +339,8 @@ async function fetchLogs(reset=false) {
 }
 
 function logLine(e) {
-  return `<div class="log-line" data-level="${esc(e.level)}" data-msg="${esc(e.message)}"><span class="t">${esc(e.time)}</span><span class="lv ${esc(e.level)}">${esc(e.level)}</span><span class="msg">${esc(e.message)}</span></div>`;
+  const msg = esc(e.message), full = esc(e.time+' '+e.level+' '+e.message);
+  return `<div class="log-line" data-level="${esc(e.level)}" data-msg="${esc(e.message)}" title="${full}"><span class="t">${esc(e.time)}</span><span class="lv ${esc(e.level)}">${esc(e.level)}</span><span class="msg">${msg}</span></div>`;
 }
 function applyLogFilter() {
   const lv = $('log-level').value, kw = $('log-search').value.toLowerCase();
@@ -352,7 +374,9 @@ function init() {
   $('log-level').onchange = applyLogFilter;
   $('log-search').oninput = applyLogFilter;
   $('inline-log-level').onchange = applyLogFilter;
-  $('history-more').onclick = () => { historyLimit += 100; loadHistory(); };
+  $('history-prev').onclick = () => { if (historyPage > 1) { historyPage--; loadHistory(); } };
+  $('history-next').onclick = () => { historyPage++; loadHistory(); };
+  $('history-clear').onclick = clearHistory;
   let st; $('search').oninput = e => { clearTimeout(st); st=setTimeout(()=>{ historyKeyword=e.target.value; loadHistory(true); }, 350); };
   if (location.hash === '#settings') openSettings();
   if (location.hash === '#logs') openLogs();

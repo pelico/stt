@@ -101,6 +101,12 @@ func (h *HistoryDB) List(limit, offset int, keyword string) ([]Transcript, int, 
 	return items, total, rows.Err()
 }
 
+// Clear deletes all recognition history rows.
+func (h *HistoryDB) Clear() error {
+	_, err := h.db.Exec("DELETE FROM transcripts")
+	return err
+}
+
 // PendingItem is one audio segment waiting for recognition.
 type PendingItem struct {
 	ID        int64
