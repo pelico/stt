@@ -71,6 +71,7 @@ type Settings struct {
 	SaveAudio          bool
 	AudioDir           string
 	AccessToken        string
+	AccessPassword     string
 	FFmpegPath         string
 	FFmpegTimeout      int
 	LogLevel           string
@@ -171,6 +172,7 @@ func LoadSettings() *Settings {
 		SaveAudio:          envBool("SAVE_AUDIO", false),
 		AudioDir:           env("AUDIO_DIR", "/data/audio"),
 		AccessToken:        env("ACCESS_TOKEN", ""),
+		AccessPassword:     env("ACCESS_PASSWORD", env("ACCESS_TOKEN", "")),
 		FFmpegPath:         env("FFMPEG_PATH", "ffmpeg"),
 		FFmpegTimeout:      envInt("FFMPEG_TIMEOUT", 20),
 		LogLevel:           env("LOG_LEVEL", "INFO"),
@@ -190,6 +192,7 @@ const (
 var fieldTypes = map[string]FieldType{
 	"rtsp_url": TypeString, "asr_engine": TypeString, "asr_model": TypeString,
 	"asr_language": TypeString, "dashscope_api_key": TypeString,
+	"access_password": TypeString,
 	"tencent_secret_id": TypeString, "tencent_secret_key": TypeString,
 	"tencent_region": TypeString, "openai_base_url": TypeString,
 	"openai_api_key": TypeString, "openai_model": TypeString,
@@ -211,6 +214,7 @@ var fieldTypes = map[string]FieldType{
 var secretFields = map[string]bool{
 	"dashscope_api_key": true, "tencent_secret_id": true,
 	"tencent_secret_key": true, "openai_api_key": true,
+	"access_password": true,
 }
 
 var Engines = []string{"aliyun", "tencent", "openai"}
@@ -219,6 +223,7 @@ func defaults(s *Settings) map[string]any {
 	return map[string]any{
 		"rtsp_url": s.RTSPURL, "asr_engine": s.ASREngine, "asr_model": s.ASRModel,
 		"asr_language": s.ASRLanguage, "dashscope_api_key": s.DashScopeAPIKey,
+		"access_password": s.AccessPassword,
 		"tencent_secret_id": s.TencentSecretID, "tencent_secret_key": s.TencentSecretKey,
 		"tencent_region": s.TencentRegion, "openai_base_url": s.OpenAIBaseURL,
 		"openai_api_key": s.OpenAIAPIKey, "openai_model": s.OpenAIModel,
@@ -504,7 +509,11 @@ func (c *RuntimeConfig) Update(patch map[string]any) ([]string, error) {
 		if ft == TypeString {
 			s, _ := v.(string)
 			if secretFields[key] && (s == "" || strings.Contains(s, "****")) {
-				continue
+				// 密钥字段留空/掩码=不修改；但访问口令是用户主动输入的鉴权值，
+				// 允许显式清空（clear_access_password=true）以关闭口令。
+				if key != "access_password" || patch["clear_access_password"] != true {
+					continue
+				}
 			}
 		}
 		if !equalValue(c.values[key], v) {

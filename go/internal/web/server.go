@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,7 +76,7 @@ func New(s *config.Settings) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open pending db: %w", err)
 	}
-	rtspHist := store.NewRTSPHistory("/data/rtsp_history.json")
+	rtspHist := store.NewRTSPHistory(filepath.Join(filepath.Dir(s.DBPath), "rtsp_history.json"))
 
 	srv := &Server{
 		settings:   s,
@@ -110,6 +111,14 @@ func (s *Server) Start() {
 			}
 			if k == "queue_mode" {
 				s.log("WARN", "识别队列模式已变更，需重启容器后生效")
+			}
+			if k == "access_password" {
+				s.auth.SetPassword(s.cfg.Str("access_password"))
+				if s.cfg.Str("access_password") != "" {
+					s.log("INFO", "访问口令已更新，全部会话需重新登录")
+				} else {
+					s.log("INFO", "访问口令已清除，无需登录即可访问")
+				}
 			}
 		}
 	})
@@ -481,7 +490,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"engines":          config.Engines,
 			"engine_ready":     s.cfg.EngineReady(),
 			"asr_active":       s.cfg.ASRActive(),
-			"access_token_set": s.settings.AccessToken != "",
+			"access_token_set": s.cfg.Str("access_password") != "",
 		})
 	case http.MethodPost:
 		var patch map[string]any

@@ -67,7 +67,25 @@ type AuthGuard struct {
 
 func NewAuthGuard(password string) *AuthGuard { return &AuthGuard{password: password} }
 
-func (a *AuthGuard) Enabled() bool { return a.password != "" }
+func (a *AuthGuard) Password() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.password
+}
+
+// SetPassword 热更新访问口令：空串表示关闭口令；已有会话 cookie 会因签名密钥
+// 变化而全部失效，需要重新登录。
+func (a *AuthGuard) SetPassword(p string) {
+	a.mu.Lock()
+	a.password = p
+	a.fails = 0
+	a.lockedUntil = time.Time{}
+	a.mu.Unlock()
+}
+
+func (a *AuthGuard) Enabled() bool {
+	return a.Password() != ""
+}
 
 func (a *AuthGuard) CheckLogin(password string) (ok bool, locked bool, retryAfter int) {
 	a.mu.Lock()
@@ -90,27 +108,28 @@ func (a *AuthGuard) CheckLogin(password string) (ok bool, locked bool, retryAfte
 func (a *AuthGuard) setSessionCookie(w http.ResponseWriter, r *http.Request) {
 	secure := r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: makeToken(a.password), Path: "/",
+		Name: cookieName, Value: makeToken(a.Password()), Path: "/",
 		MaxAge: 30 * 24 * 3600, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure,
 	})
 }
 
 func (a *AuthGuard) authorized(r *http.Request) bool {
-	if !a.Enabled() {
+	password := a.Password()
+	if password == "" {
 		return true
 	}
 	supplied := r.Header.Get("X-Access-Token")
 	if supplied == "" {
 		supplied = r.URL.Query().Get("token")
 	}
-	if passwordMatches(supplied, a.password) {
+	if passwordMatches(supplied, password) {
 		return true
 	}
 	cookie, err := r.Cookie(cookieName)
 	if err != nil {
 		return false
 	}
-	return verifyToken(cookie.Value, a.password)
+	return verifyToken(cookie.Value, password)
 }
 
 // WSAuthorized checks WebSocket handshake (cookie or token query param).

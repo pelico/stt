@@ -283,6 +283,7 @@ const FIELDS = [
     ['rtsp_url','RTSP 地址','text','摄像头流地址，修改后立即重连'],
     ['asr_engine','识别引擎','select',null,['aliyun','tencent','openai']],
     ['asr_language','识别语言','select',null,['zh','en','auto']],
+    ['access_password','访问口令','password','留空表示不修改；设置后全部会话需重新登录'],
   ]],
   ['阿里云百炼', [
     ['dashscope_api_key','DashScope API Key','password','留空表示不修改'],
@@ -354,13 +355,23 @@ function fieldHTML(name, label, type, hint, options, val) {
 function renderSettings(d) {
   settingsCache = d;
   const v = d.values || {};
-  let html = `<div class="group"><h3>访问口令</h3><div class="field"><label>状态</label><div class="vad-row"><span>${d.access_token_set ? '已启用访问口令' : '未启用访问口令'}</span><b class="${d.engine_ready ? 'ok' : 'warn'}">${d.engine_ready ? '引擎已就绪' : '引擎未就绪'}</b></div></div></div>`;
+  const pwSet = !!v.access_password_set;
+  let html = `<div class="group"><h3>访问口令</h3><div class="field"><label>状态</label><div class="vad-row"><span>${pwSet ? '已启用访问口令' : '未启用访问口令'}</span>${pwSet ? '<button class="btn sm danger" id="clear-password">清除口令</button>' : ''}<b class="${d.engine_ready ? 'ok' : 'warn'}">${d.engine_ready ? '引擎已就绪' : '引擎未就绪'}</b></div></div></div>`;
   for (const [group, fields] of FIELDS) {
     html += `<div class="group"><h3>${esc(group)}</h3>`;
     for (const f of fields) html += fieldHTML(f[0], f[1], f[2], f[3], f[4], v[f[0]]);
     html += '</div>';
   }
   $('settings-form').innerHTML = html;
+  const clearBtn = $('clear-password');
+  if (clearBtn) clearBtn.onclick = async () => {
+    if (!confirm('确定清除访问口令？清除后任何人都可以直接访问。')) return;
+    try {
+      await api('/api/settings', {method:'POST', body:JSON.stringify({access_password:'', clear_access_password:true})});
+      toast('访问口令已清除');
+      renderSettings(await api('/api/settings'));
+    } catch(e) { toast('清除失败'); }
+  };
   $('settings-form').querySelectorAll('input[type=range]').forEach(el=>{
     el.addEventListener('input', ()=>{
       const b=$(el.id+'-v'); if(b) b.textContent = el.value;
@@ -449,6 +460,11 @@ async function saveSettings() {
   }
   try {
     const r = await api('/api/settings', {method:'POST', body:JSON.stringify(patch)});
+    if ((r.changed||[]).includes('access_password')) {
+      toast('访问口令已更新，请重新登录');
+      setTimeout(()=>{ location.href = '/login'; }, 800);
+      return;
+    }
     toast(r.changed.length ? '已保存并应用 '+r.changed.length+' 项' : '设置无变化');
     closeSettings(); fetchHealth();
   } catch(e) { toast('保存失败：'+e.message); }
