@@ -53,6 +53,7 @@ type Settings struct {
 	VADMinSpeechRatio  float64
 	VADPrerollMS       int
 	VADTailPadMS       int
+	VADMaxSegmentSec   int
 	VADRMSDBFS         float64
 	FFmpegHighpass     int
 	FFmpegDenoise      bool
@@ -152,6 +153,7 @@ func LoadSettings() *Settings {
 		VADMinSpeechRatio:  envFloat("VAD_MIN_SPEECH_RATIO", 0.5),
 		VADPrerollMS:       envInt("VAD_PREROLL_MS", 200),
 		VADTailPadMS:       envInt("VAD_TAIL_PAD_MS", 150),
+		VADMaxSegmentSec:   envInt("VAD_MAX_SEGMENT_SEC", 12),
 		VADRMSDBFS:         envFloat("VAD_RMS_DBFS", -45),
 		FFmpegHighpass:     envInt("FFMPEG_HIGHPASS", 100),
 		FFmpegDenoise:      envBool("FFMPEG_DENOISE", true),
@@ -193,7 +195,8 @@ var fieldTypes = map[string]FieldType{
 	"openai_api_key": TypeString, "openai_model": TypeString,
 	"vad_mode": TypeInt, "vad_frame_ms": TypeInt, "vad_silence_frames": TypeInt,
 	"vad_min_speech_frames": TypeInt, "vad_min_speech_ratio": TypeFloat,
-	"vad_preroll_ms": TypeInt, "vad_tail_pad_ms": TypeInt, "vad_rms_dbfs": TypeFloat,
+	"vad_preroll_ms": TypeInt, "vad_tail_pad_ms": TypeInt, "vad_max_segment_sec": TypeInt,
+	"vad_rms_dbfs": TypeFloat,
 	"ffmpeg_path":     TypeString,
 	"ffmpeg_highpass": TypeInt, "ffmpeg_timeout": TypeInt,
 	"asr_max_queue_age": TypeInt, "queue_mode": TypeString,
@@ -222,7 +225,8 @@ func defaults(s *Settings) map[string]any {
 		"vad_mode": s.VADMode, "vad_frame_ms": s.VADFrameMS,
 		"vad_silence_frames": s.VADSilenceFrames, "vad_min_speech_frames": s.VADMinSpeechFrames,
 		"vad_min_speech_ratio": s.VADMinSpeechRatio, "vad_preroll_ms": s.VADPrerollMS,
-		"vad_tail_pad_ms": s.VADTailPadMS, "vad_rms_dbfs": s.VADRMSDBFS,
+		"vad_tail_pad_ms": s.VADTailPadMS, "vad_max_segment_sec": s.VADMaxSegmentSec,
+		"vad_rms_dbfs": s.VADRMSDBFS,
 		"ffmpeg_path":     s.FFmpegPath,
 		"ffmpeg_highpass": s.FFmpegHighpass, "ffmpeg_denoise": s.FFmpegDenoise,
 		"ffmpeg_timeout": s.FFmpegTimeout, "asr_max_queue_age": s.ASRMaxQueueAge,
@@ -280,6 +284,10 @@ func validate(key string, raw any) (any, error) {
 		case "vad_tail_pad_ms":
 			if v < 0 || v > 2000 {
 				return nil, fmt.Errorf("vad_tail_pad_ms 必须在 0 ~ 2000")
+			}
+		case "vad_max_segment_sec":
+			if v < 5 || v > 60 {
+				return nil, fmt.Errorf("vad_max_segment_sec 必须在 5 ~ 60")
 			}
 		case "ffmpeg_highpass":
 			if v < 0 || v > 8000 {

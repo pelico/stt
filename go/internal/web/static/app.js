@@ -306,7 +306,8 @@ const FIELDS = [
     ['vad_min_speech_ratio','有效语音占比','range','0-1'],
     ['vad_rms_dbfs','能量门限 (dBFS)','range','-80 ~ -10'],
     ['vad_preroll_ms','句首补帧 (ms)','number','避免吞字头'],
-    ['vad_tail_pad_ms','句尾保留 (ms)','number','减少幻觉短词'],
+    ['vad_tail_pad_ms','句尾保留 (ms)','number','给 ASR 留出收尾静音'],
+    ['vad_max_segment_sec','单段最长 (s)','number','5-60，太长会从词中间切断'],
   ]],
   ['音频处理', [
     ['ffmpeg_highpass','高通滤波 (Hz)','number','0 关闭'],

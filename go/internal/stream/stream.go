@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	maxSegmentSec = 30
-	stateInterval = 200 * time.Millisecond
+	defaultMaxSegmentSec = 12
+	stateInterval        = 200 * time.Millisecond
 )
 
 // State is pushed to the UI for VAD tuning.
@@ -443,6 +443,10 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 		rmsLimit := cfg.Float("vad_rms_dbfs")
 		prerollLimit := max(frameBytes, sampleRate*2*cfg.Int("vad_preroll_ms")/1000)
 		tailPadFrames := max(0, cfg.Int("vad_tail_pad_ms")/max(1, frameMS))
+		maxSegmentSec := cfg.Int("vad_max_segment_sec")
+		if maxSegmentSec <= 0 {
+			maxSegmentSec = defaultMaxSegmentSec
+		}
 
 		readCtx, cancelRead := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		frame := make([]byte, frameBytes)
