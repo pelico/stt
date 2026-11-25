@@ -46,6 +46,7 @@ type Settings struct {
 	ASRMergeMaxSec     int
 	ASRMaxQueueAge     int
 	SampleRate         int
+	VADEngine          string
 	VADMode            int
 	VADFrameMS         int
 	VADSilenceFrames   int
@@ -148,6 +149,7 @@ func LoadSettings() *Settings {
 		ASRMergeMaxSec:     envInt("ASR_MERGE_MAX_SEC", 10),
 		ASRMaxQueueAge:     envInt("ASR_MAX_QUEUE_AGE", 10),
 		SampleRate:         16000,
+		VADEngine:          env("VAD_ENGINE", "webrtc"),
 		VADMode:            envInt("VAD_MODE", 2),
 		VADFrameMS:         envInt("VAD_FRAME_MS", 30),
 		VADSilenceFrames:   envInt("VAD_SILENCE_FRAMES", 20),
@@ -200,7 +202,7 @@ var fieldTypes = map[string]FieldType{
 	"vad_mode": TypeInt, "vad_frame_ms": TypeInt, "vad_silence_frames": TypeInt,
 	"vad_min_speech_frames": TypeInt, "vad_min_speech_ratio": TypeFloat,
 	"vad_preroll_ms": TypeInt, "vad_tail_pad_ms": TypeInt, "vad_max_segment_sec": TypeInt,
-	"vad_rms_dbfs": TypeFloat,
+	"vad_rms_dbfs": TypeFloat, "vad_engine": TypeString,
 	"ffmpeg_path":     TypeString,
 	"ffmpeg_highpass": TypeInt, "ffmpeg_timeout": TypeInt,
 	"asr_max_queue_age": TypeInt, "queue_mode": TypeString,
@@ -232,7 +234,7 @@ func defaults(s *Settings) map[string]any {
 		"vad_silence_frames": s.VADSilenceFrames, "vad_min_speech_frames": s.VADMinSpeechFrames,
 		"vad_min_speech_ratio": s.VADMinSpeechRatio, "vad_preroll_ms": s.VADPrerollMS,
 		"vad_tail_pad_ms": s.VADTailPadMS, "vad_max_segment_sec": s.VADMaxSegmentSec,
-		"vad_rms_dbfs": s.VADRMSDBFS,
+		"vad_rms_dbfs": s.VADRMSDBFS, "vad_engine": s.VADEngine,
 		"ffmpeg_path":     s.FFmpegPath,
 		"ffmpeg_highpass": s.FFmpegHighpass, "ffmpeg_denoise": s.FFmpegDenoise,
 		"ffmpeg_timeout": s.FFmpegTimeout, "asr_max_queue_age": s.ASRMaxQueueAge,
@@ -256,7 +258,11 @@ func validate(key string, raw any) (any, error) {
 		if raw == nil {
 			return "", nil
 		}
-		return strings.TrimSpace(fmt.Sprint(raw)), nil
+		sv := strings.TrimSpace(fmt.Sprint(raw))
+		if key == "vad_engine" && sv != "webrtc" && sv != "energy" {
+			return nil, fmt.Errorf("vad_engine 只能是 webrtc 或 energy")
+		}
+		return sv, nil
 	case TypeInt:
 		v, err := toInt(raw)
 		if err != nil {

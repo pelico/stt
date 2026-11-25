@@ -448,6 +448,7 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 
 	reader := bufio.NewReaderSize(stdout, 64*1024)
 	buffer := []byte{}
+	frameBuf := []byte{}
 	speechBuffer := []byte{}
 	silenceCount := 0
 	speechFrames := 0
@@ -476,10 +477,13 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 		if maxSegmentSec <= 0 {
 			maxSegmentSec = defaultMaxSegmentSec
 		}
+		energyOnly := cfg.Str("vad_engine") == "energy"
+		if len(frameBuf) != frameBytes {
+			frameBuf = make([]byte, frameBytes)
+		}
 
 		readCtx, cancelRead := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
-		frame := make([]byte, frameBytes)
-		n, err := readFull(readCtx, reader, frame)
+		n, err := readFull(readCtx, reader, frameBuf)
 		cancelRead()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -490,28 +494,33 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 			break
 		}
 		gotData = true
-		data := frame[:n]
+		data := frameBuf[:n]
 		buffer = append(buffer, data...)
 		for len(buffer) >= frameBytes {
 			f := buffer[:frameBytes]
 			buffer = buffer[frameBytes:]
 
 			level := frameDBFS(f)
-			vad, verr := s.getVAD()
-			vadSpeech := false
-			if verr == nil {
-				// Process expects the frame length in SAMPLES, not bytes.
-				// The library multiplies by 2 internally for 16-bit PCM.
-				vadSpeech, verr = webrtcvad.Process(vad, sampleRate, f, frameBytes/2)
-			}
-			if verr != nil {
-				vadSpeech = false
-				if !vadErrLogged {
-					s.cb.Log("ERROR", "VAD 处理失败: %v", verr)
-					vadErrLogged = true
+			isSpeech := level >= rmsLimit
+			if energyOnly {
+				// 纯能量断句：跳过 wasm VAD（armv7 上解释器开销大）
+			} else {
+				vad, verr := s.getVAD()
+				vadSpeech := false
+				if verr == nil {
+					// Process expects the frame length in SAMPLES, not bytes.
+					// The library multiplies by 2 internally for 16-bit PCM.
+					vadSpeech, verr = webrtcvad.Process(vad, sampleRate, f, frameBytes/2)
 				}
+				if verr != nil {
+					vadSpeech = false
+					if !vadErrLogged {
+						s.cb.Log("ERROR", "VAD 处理失败: %v", verr)
+						vadErrLogged = true
+					}
+				}
+				isSpeech = vadSpeech && level >= rmsLimit
 			}
-			isSpeech := vadSpeech && level >= rmsLimit
 
 			if isSpeech {
 				if !inSpeech {

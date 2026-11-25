@@ -300,6 +300,7 @@ const FIELDS = [
     ['openai_model','模型','text','whisper-1'],
   ]],
   ['VAD 切句', [
+    ['vad_engine','VAD 引擎','select','webrtc=WebRTC VAD 质量好；energy=纯能量门限，弱设备(armv7)选它 CPU 低',['webrtc','energy']],
     ['vad_mode','灵敏度 (0-3)','range','越大越严格'],
     ['vad_frame_ms','分析帧长','select',null,['10','20','30']],
     ['vad_silence_frames','断句静音帧数','number','20 帧 × 30ms = 600ms'],
