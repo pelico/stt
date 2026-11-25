@@ -112,6 +112,12 @@ type Streamer struct {
 	lagSec   float64
 	wakeup   chan struct{}
 	lastVac  time.Time
+
+	// 入队前合并缓冲：ASR 很快时队列常为空，consume 层的合并机会不到，
+	// 这里把相邻 VAD 小段先攒一下，避免同一句话被拆成多条字幕。
+	pendingMu   sync.Mutex
+	pendingPCM  []byte
+	pendingTimer *time.Timer
 }
 
 type rtItem struct {
@@ -256,6 +262,7 @@ func (s *Streamer) Stop() {
 	s.running = false
 	cancel := s.cancel
 	s.mu.Unlock()
+	s.flushPending()
 	if cancel != nil {
 		cancel()
 	}
@@ -645,6 +652,44 @@ func frameDBFS(frame []byte) float64 {
 }
 
 func (s *Streamer) enqueue(pcm []byte) {
+	gap := s.cb.Config.Float("asr_merge_gap_sec")
+	if gap <= 0 {
+		s.putPCM(pcm)
+		return
+	}
+	s.pendingMu.Lock()
+	s.pendingPCM = append(s.pendingPCM, pcm...)
+	maxSec := max(1, s.cb.Config.Int("vad_max_segment_sec"))
+	if len(s.pendingPCM) >= maxSec*16000*2 {
+		s.pendingMu.Unlock()
+		s.flushPending()
+		return
+	}
+	if s.pendingTimer != nil {
+		s.pendingTimer.Stop()
+	}
+	s.pendingTimer = time.AfterFunc(time.Duration(gap*float64(time.Second)), s.flushPending)
+	s.pendingMu.Unlock()
+}
+
+// flushPending 把攒够/超时的相邻语音段真正送进识别队列。
+func (s *Streamer) flushPending() {
+	s.pendingMu.Lock()
+	timer := s.pendingTimer
+	s.pendingTimer = nil
+	pcm := s.pendingPCM
+	s.pendingPCM = nil
+	s.pendingMu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+	if len(pcm) == 0 {
+		return
+	}
+	s.putPCM(pcm)
+}
+
+func (s *Streamer) putPCM(pcm []byte) {
 	cfg := s.cb.Config
 	if s.Mode() == "durable" {
 		wallISO := time.Now().UTC().Format("2006-01-02T15:04:05")
