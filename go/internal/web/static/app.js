@@ -288,17 +288,27 @@ async function saveSettings() {
 }
 
 // ---------- logs ----------
-function openLogs() { $('log-panel').classList.add('show'); $('log-mask').classList.add('show'); fetchLogs(true); logTimer = setInterval(fetchLogs, 1500); }
-function closeLogs() { $('log-panel').classList.remove('show'); $('log-mask').classList.remove('show'); clearInterval(logTimer); }
+// Logs are rendered both in the full-screen panel and in the inline home card.
+// The inline card polls continuously so the log is always live on the dashboard.
+function openLogs() { $('log-panel').classList.add('show'); $('log-mask').classList.add('show'); fetchLogs(true); }
+function closeLogs() { $('log-panel').classList.remove('show'); $('log-mask').classList.remove('show'); }
 
 async function fetchLogs(reset=false) {
   if (logPaused && !reset) return;
-  if (reset) { logAfter = 0; $('log-body').innerHTML=''; }
+  if (reset) { logAfter = 0; $('log-body').innerHTML=''; $('inline-log-body').innerHTML=''; }
   try {
     const d = await api(`/api/logs?after=${logAfter}&limit=500`);
     if (d.items && d.items.length) {
-      for (const it of d.items) $('log-body').insertAdjacentHTML('beforeend', logLine(it));
+      for (const it of d.items) {
+        const line = logLine(it);
+        $('log-body').insertAdjacentHTML('beforeend', line);
+        $('inline-log-body').insertAdjacentHTML('beforeend', line);
+      }
       logAfter = d.last_id;
+      // Bound the inline buffer so long-running sessions stay lightweight.
+      const ib = $('inline-log-body');
+      while (ib.children.length > 400) ib.removeChild(ib.firstChild);
+      ib.scrollTop = ib.scrollHeight;
       const b = $('log-body'); b.scrollTop = b.scrollHeight;
       applyLogFilter();
     }
@@ -316,11 +326,17 @@ function applyLogFilter() {
     const ok = (!lv || el.dataset.level === lv) && (!kw || el.dataset.msg.toLowerCase().includes(kw));
     el.style.display = ok ? '' : 'none';
   });
+  const ilv = $('inline-log-level').value;
+  $('inline-log-body').querySelectorAll('.log-line').forEach(el=>{
+    el.style.display = (!ilv || el.dataset.level === ilv) ? '' : 'none';
+  });
 }
 
 function init() {
   connectWS(); fetchHealth(); loadHistory();
+  fetchLogs(true);
   setInterval(fetchHealth, 5000);
+  setInterval(fetchLogs, 1500);
   $('listen-btn').onclick = toggleListen;
   $('asr-toggle').onclick = toggleASR;
   $('open-settings').onclick = openSettings;
@@ -332,9 +348,10 @@ function init() {
   $('log-close').onclick = closeLogs;
   $('log-mask').onclick = closeLogs;
   $('log-pause').onclick = () => { logPaused=!logPaused; $('log-pause').textContent = logPaused?'继续':'暂停'; };
-  $('log-clear').onclick = async () => { await api('/api/logs',{method:'DELETE'}); $('log-body').innerHTML=''; logAfter=0; };
+  $('log-clear').onclick = async () => { await api('/api/logs',{method:'DELETE'}); $('log-body').innerHTML=''; $('inline-log-body').innerHTML=''; logAfter=0; };
   $('log-level').onchange = applyLogFilter;
   $('log-search').oninput = applyLogFilter;
+  $('inline-log-level').onchange = applyLogFilter;
   $('history-more').onclick = () => { historyLimit += 100; loadHistory(); };
   let st; $('search').oninput = e => { clearTimeout(st); st=setTimeout(()=>{ historyKeyword=e.target.value; loadHistory(true); }, 350); };
   if (location.hash === '#settings') openSettings();

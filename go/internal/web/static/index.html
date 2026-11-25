@@ -87,6 +87,14 @@
         <div class="vad-row" style="margin-bottom:6px"><span>识别状态</span><b id="asr-state">—</b></div>
         <div class="vad-row"><span>拉流状态</span><b id="stream-state">—</b></div>
       </section>
+
+      <section class="card" id="log-card">
+        <div class="card-head">
+          <h2>运行日志</h2>
+          <span class="sub"><select id="inline-log-level" class="mini-select"><option value="">全部</option><option>ERROR</option><option>WARN</option><option>INFO</option><option>DEBUG</option></select></span>
+        </div>
+        <div class="log-body inline-log" id="inline-log-body"></div>
+      </section>
     </aside>
   </div>
 </div>
