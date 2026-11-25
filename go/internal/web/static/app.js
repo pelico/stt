@@ -77,8 +77,13 @@ function transcriptItem(m) {
   return `<div class="history-item"><div class="meta"><span>${esc(fmtTime(m.timestamp))}</span><span>${esc(m.engine||'')}</span><span>${esc(m.duration_sec||0)}s</span></div>${esc(m.text)}</div>`;
 }
 
+// 电平条、门限块、拖动条共用同一个 dBFS 坐标系，避免拖动后门限块与电平条错位。
+const RMS_MIN = -80, RMS_MAX = -10;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const rmsPct = v => clamp((v - RMS_MIN) / (RMS_MAX - RMS_MIN) * 100, 0, 100);
+
 function onVAD(m) {
-  const pct = Math.max(0, Math.min(100, (m.level + 60) / 60 * 100));
+  const pct = rmsPct(m.level);
   $('vad-level').style.width = pct+'%';
   $('level_dbfs').textContent = m.level.toFixed(1);
   $('vad-badge').textContent = m.active ? '语音中' : (m.speech ? '检测到语音' : '静音');
@@ -90,17 +95,64 @@ function onVAD(m) {
   $('m-totals').textContent = (m.enq||0)+' / '+(m.deq||0);
 }
 
-// Energy threshold: meter level uses [-60,0] -> 0..100%; threshold domain [-80,-10]
-// must be mapped to the same coordinate system so the marker lines up with the meter.
-function thresholdPct(v) { return Math.max(0, Math.min(100, ((v+60)/60)*100)); }
+function thresholdPct(v) { return rmsPct(v); }
 function syncThresholdMarker() {
+  const v = parseInt($('live_rms').value, 10);
   const el = $('vad-threshold');
-  if (el) el.style.left = thresholdPct(parseInt($('live_rms').value,10))+'%';
+  if (el) el.style.left = thresholdPct(v)+'%';
+  const wrap = $('meter-wrap');
+  if (wrap) {
+    wrap.setAttribute('aria-valuenow', String(v));
+    wrap.setAttribute('aria-valuetext', v+' dBFS');
+  }
 }
 function syncThresholdLabel() {
   const v = $('live_rms').value;
   $('live_rms_val').textContent = v+' dBFS';
   syncThresholdMarker();
+}
+let thresholdDragging = false, thresholdCommitTimer = null;
+function setThresholdFromClientX(clientX) {
+  const wrap = $('meter-wrap');
+  const r = wrap.getBoundingClientRect();
+  if (!r.width) return;
+  const pct = clamp((clientX - r.left) / r.width, 0, 1);
+  $('live_rms').value = String(Math.round(RMS_MIN + pct * (RMS_MAX - RMS_MIN)));
+  syncThresholdLabel();
+}
+function initThresholdDrag() {
+  const wrap = $('meter-wrap');
+  if (!wrap) return;
+  wrap.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    thresholdDragging = true;
+    wrap.setPointerCapture?.(e.pointerId);
+    setThresholdFromClientX(e.clientX);
+  });
+  wrap.addEventListener('pointermove', e => {
+    if (thresholdDragging) setThresholdFromClientX(e.clientX);
+  });
+  const finish = () => {
+    if (!thresholdDragging) return;
+    thresholdDragging = false;
+    commitThreshold();
+  };
+  wrap.addEventListener('pointerup', finish);
+  wrap.addEventListener('pointercancel', finish);
+  wrap.addEventListener('keydown', e => {
+    const step = e.key === 'PageUp' || e.key === 'PageDown' ? 5 : 1;
+    let v = parseInt($('live_rms').value, 10);
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'PageUp') v += step;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'PageDown') v -= step;
+    else if (e.key === 'Home') v = RMS_MIN;
+    else if (e.key === 'End') v = RMS_MAX;
+    else return;
+    e.preventDefault();
+    $('live_rms').value = String(clamp(v, RMS_MIN, RMS_MAX));
+    syncThresholdLabel();
+    clearTimeout(thresholdCommitTimer);
+    thresholdCommitTimer = setTimeout(commitThreshold, 150);
+  });
 }
 async function commitThreshold() {
   const value = parseInt($('live_rms').value,10);
@@ -454,11 +506,10 @@ function init() {
   api('/api/settings').then(d=>{
     settingsCache = d;
     const v = d.values?.vad_rms_dbfs;
-    if (v != null) { $('live_rms').value = Math.max(-80,Math.min(-10, Math.round(v))); syncThresholdLabel(); }
+    if (v != null) { $('live_rms').value = String(clamp(Math.round(v), RMS_MIN, RMS_MAX)); syncThresholdLabel(); }
     loadRtspHistory();
   }).catch(()=>{});
-  $('live_rms').addEventListener('input', syncThresholdLabel);
-  $('live_rms').addEventListener('change', commitThreshold);
+  initThresholdDrag();
   $('rtsp-switch').addEventListener('change', switchStream);
   $('rtsp-switch-edit').onclick = openSettings;
   syncThresholdMarker();
