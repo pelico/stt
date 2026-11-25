@@ -2,6 +2,7 @@ package asr
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,12 +17,15 @@ type OpenAI struct {
 	cfg      Config
 	timeouts Timeouts
 	client   *http.Client
+	pred     *LatencyPredictor
 }
 
 func NewOpenAI(cfg Config, t Timeouts) *OpenAI {
 	return &OpenAI{
 		cfg: cfg, timeouts: t,
-		client: &http.Client{Timeout: time.Duration(t.ConnectSec+t.ReadSec) * time.Second},
+		// 不用 client 级固定超时：读超时按预测值逐请求动态计算，防活锁
+		client: &http.Client{},
+		pred:   NewLatencyPredictor(cfg),
 	}
 }
 func (o *OpenAI) Name() string { return "openai" }
@@ -64,6 +68,14 @@ func (o *OpenAI) Recognize(pcm []byte) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", mp.FormDataContentType())
 
+	// 动态读超时 = max(配置读超时, 预测耗时×容差 + 10s 余量)；
+	// 固定超时会误杀长合并块（超时→重试→服务端排队→更慢→活锁）
+	readSec := o.pred.ReadTimeout(o.timeouts.ReadSec, float64(len(pcm))/32000)
+	ctx, cancel := context.WithTimeout(context.Background(),
+		time.Duration(o.timeouts.ConnectSec+readSec)*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
 	resp, err := o.client.Do(req)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "timeout") {
@@ -87,3 +99,9 @@ func (o *OpenAI) Recognize(pcm []byte) (string, error) {
 	}
 	return strings.TrimSpace(parsed.Text), nil
 }
+
+// SlowPredictor 接口实现：供 Server 记录预测日志与慢请求告警。
+func (o *OpenAI) Predict(d float64) float64       { return o.pred.Predict(d) }
+func (o *OpenAI) SlowThreshold(d float64) float64 { return o.pred.SlowThreshold(d) }
+func (o *OpenAI) LearnedRT() float64              { return o.pred.LearnedRT() }
+func (o *OpenAI) Observe(lat, d float64)          { o.pred.Observe(lat, d) }

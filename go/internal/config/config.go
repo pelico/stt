@@ -203,6 +203,8 @@ var fieldTypes = map[string]FieldType{
 	"vad_min_speech_frames": TypeInt, "vad_min_speech_ratio": TypeFloat,
 	"vad_preroll_ms": TypeInt, "vad_tail_pad_ms": TypeInt, "vad_max_segment_sec": TypeInt,
 	"vad_rms_dbfs": TypeFloat, "vad_engine": TypeString,
+	"asr_slow_ms": TypeInt, "asr_slow_rt_factor": TypeFloat,
+	"asr_slow_overhead_sec": TypeFloat, "asr_slow_margin": TypeFloat,
 	"ffmpeg_path":     TypeString,
 	"ffmpeg_highpass": TypeInt, "ffmpeg_timeout": TypeInt,
 	"asr_max_queue_age": TypeInt, "queue_mode": TypeString,
@@ -235,6 +237,8 @@ func defaults(s *Settings) map[string]any {
 		"vad_min_speech_ratio": s.VADMinSpeechRatio, "vad_preroll_ms": s.VADPrerollMS,
 		"vad_tail_pad_ms": s.VADTailPadMS, "vad_max_segment_sec": s.VADMaxSegmentSec,
 		"vad_rms_dbfs": s.VADRMSDBFS, "vad_engine": s.VADEngine,
+		"asr_slow_ms": s.ASRSlowMS, "asr_slow_rt_factor": s.ASRSlowRTFactor,
+		"asr_slow_overhead_sec": s.ASRSlowOverheadSec, "asr_slow_margin": s.ASRSlowMargin,
 		"ffmpeg_path":     s.FFmpegPath,
 		"ffmpeg_highpass": s.FFmpegHighpass, "ffmpeg_denoise": s.FFmpegDenoise,
 		"ffmpeg_timeout": s.FFmpegTimeout, "asr_max_queue_age": s.ASRMaxQueueAge,
@@ -329,6 +333,10 @@ func validate(key string, raw any) (any, error) {
 			if v < 10 || v > 120 {
 				return nil, fmt.Errorf("asr_merge_max_sec 必须在 10 ~ 120")
 			}
+		case "asr_slow_ms":
+			if v < 1000 || v > 60000 {
+				return nil, fmt.Errorf("asr_slow_ms 必须在 1000 ~ 60000")
+			}
 		}
 		return v, nil
 	case TypeFloat:
@@ -344,6 +352,18 @@ func validate(key string, raw any) (any, error) {
 		case "asr_merge_gap_sec":
 			if v < 0 || v > 10 {
 				return nil, fmt.Errorf("asr_merge_gap_sec 必须在 0 ~ 10")
+			}
+		case "asr_slow_rt_factor":
+			if v < 0.1 || v > 5 {
+				return nil, fmt.Errorf("asr_slow_rt_factor 必须在 0.1 ~ 5")
+			}
+		case "asr_slow_overhead_sec":
+			if v < 0 || v > 30 {
+				return nil, fmt.Errorf("asr_slow_overhead_sec 必须在 0 ~ 30")
+			}
+		case "asr_slow_margin":
+			if v < 1.0 || v > 3.0 {
+				return nil, fmt.Errorf("asr_slow_margin 必须在 1.0 ~ 3.0")
 			}
 		}
 		return v, nil

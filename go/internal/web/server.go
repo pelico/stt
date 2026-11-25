@@ -228,9 +228,17 @@ func (s *Server) onSpeechSegment(pcm []byte, wallISO string) bool {
 	if engine == nil {
 		return false
 	}
+	pred, _ := engine.(asr.SlowPredictor)
+	reqID := s.metrics.NextID()
+	audioSec := float64(len(pcm)) / 32000
+	var predicted float64
+	if pred != nil {
+		predicted = pred.Predict(audioSec)
+		s.log("INFO", "[ASR] req#%d ASR请求 | 音频 %.1fs/%dKB | 预测 %.1fs(rt=%.2f)",
+			reqID, audioSec, len(pcm)/1024, predicted, pred.LearnedRT())
+	}
 	text, err := engine.Recognize(pcm)
 	latency := time.Since(started).Seconds()
-	reqID := s.metrics.NextID()
 	if err != nil {
 		s.mu.Lock()
 		s.asrFailures++
@@ -262,13 +270,24 @@ func (s *Server) onSpeechSegment(pcm []byte, wallISO string) bool {
 		s.mu.Unlock()
 	}
 
-	slow := s.isSlow(latency, float64(len(pcm))/32000)
+	slow := s.isSlow(latency, audioSec)
+	if pred != nil {
+		slow = latency > pred.SlowThreshold(audioSec)
+		pred.Observe(latency, audioSec)
+	}
 	s.metrics.Record(true, latency, slow)
-	if slow {
+	if slow && pred != nil {
+		s.log("WARN", "[ASR] req#%d 慢请求 %.2fs > 预测 %.1fs×%.1f (音频 %.1fs, 实时率 %.2f)：识别服务端处理过慢",
+			reqID, latency, predicted, s.settings.ASRSlowMargin, audioSec, pred.LearnedRT())
+	} else if slow {
 		s.log("WARN", "[ASR] req#%d 慢请求 %.2fs（预测见诊断）", reqID, latency)
 	}
-	s.log("INFO", "[ASR] req#%d ✓ %.2fs audio=%.1fs/%dKB | %d字: %s",
-		reqID, latency, float64(len(pcm))/32000, len(pcm)/1024, len([]rune(text)), truncate(text, 80))
+	slowMark := "✓"
+	if slow {
+		slowMark = "⚠"
+	}
+	s.log("INFO", "[ASR] req#%d ASR结果 %s %.2fs/预测%.1fs | %d字: %s",
+		reqID, slowMark, latency, predicted, len([]rune(text)), truncate(text, 80))
 
 	if text == "" {
 		return true
@@ -564,6 +583,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.settings.LogFileEnabled {
 		logFile = s.settings.LogFilePath
 	}
+	learnedRT := -1.0
+	s.engineMu.Lock()
+	if sp, ok := s.engine.(asr.SlowPredictor); ok {
+		learnedRT = sp.LearnedRT()
+	}
+	s.engineMu.Unlock()
 	writeJSON(w, 200, map[string]any{
 		"status": "ok", "rtsp_url": s.cfg.Str("rtsp_url"), "asr_engine": s.cfg.Str("asr_engine"),
 		"engine_ready": s.cfg.EngineReady(), "asr_enabled": s.cfg.Bool("asr_enabled"),
@@ -575,6 +600,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"queue_backlog_bytes": backlogBytes, "queue_lag_sec": lag,
 		"queue_totals": totals, "diagnostics": s.metrics.Snapshot(),
 		"asr_timeout": s.settings.ASRTimeout, "asr_connect_timeout": s.settings.ASRConnectTimeout,
+		"asr_learned_rt": learnedRT,
 		"asr_slow_ms": s.settings.ASRSlowMS, "log_file": logFile,
 	})
 }

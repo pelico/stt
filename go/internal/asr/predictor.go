@@ -1,0 +1,98 @@
+package asr
+
+import "sync"
+
+// SlowPredictor 由支持动态延迟预测的引擎实现（目前 openai 兼容引擎）。
+// 预测耗时 = 音频时长 × 实时率 + 固定开销；实时率用成功请求的实测值
+// EMA 自学习，服务端变快/变慢时阈值自动跟随。
+type SlowPredictor interface {
+	// Predict 预计总耗时（秒）。取「配置模型」与「实测学习模型」的较大值：
+	// 学习结果只抬高预测不降低，避免偶尔的快请求把阈值拉得过敏感。
+	Predict(durationSec float64) float64
+	// SlowThreshold 慢请求告警阈值：短音频不低于固定基线 slow_ms。
+	SlowThreshold(durationSec float64) float64
+	LearnedRT() float64
+	// Observe 用一次成功请求修正实时率（EMA 平滑，限幅防异常值带偏）。
+	// 3s 以下的片段扣掉固定开销后比例失真，不参与学习。
+	Observe(latencySec, durationSec float64)
+}
+
+// LatencyPredictor 是 SlowPredictor 的共享实现。
+type LatencyPredictor struct {
+	mu        sync.Mutex
+	cfgRT     float64
+	learnedRT float64
+	overhead  float64
+	margin    float64
+	slowSec   float64
+}
+
+// NewLatencyPredictor 从配置构造；缺省值与 Python 版一致。
+func NewLatencyPredictor(cfg Config) *LatencyPredictor {
+	cfgRT := cfg.Float("asr_slow_rt_factor")
+	if cfgRT < 0.1 {
+		cfgRT = 1.5
+	}
+	overhead := cfg.Float("asr_slow_overhead_sec")
+	if overhead < 0 {
+		overhead = 3.0
+	}
+	margin := cfg.Float("asr_slow_margin")
+	if margin < 1.0 {
+		margin = 1.3
+	}
+	slowSec := float64(cfg.Int("asr_slow_ms")) / 1000
+	if slowSec < 1 {
+		slowSec = 10
+	}
+	return &LatencyPredictor{
+		cfgRT: cfgRT, learnedRT: cfgRT,
+		overhead: overhead, margin: margin, slowSec: slowSec,
+	}
+}
+
+func (p *LatencyPredictor) Predict(d float64) float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return max(d*p.cfgRT, d*p.learnedRT) + p.overhead
+}
+
+func (p *LatencyPredictor) SlowThreshold(d float64) float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return max(p.slowSec, (max(d*p.cfgRT, d*p.learnedRT)+p.overhead)*p.margin)
+}
+
+func (p *LatencyPredictor) LearnedRT() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.learnedRT
+}
+
+func (p *LatencyPredictor) Observe(latencySec, durationSec float64) {
+	if durationSec < 3.0 {
+		return
+	}
+	rt := (latencySec - p.getOverhead()) / durationSec
+	if rt < 0.1 {
+		rt = 0.1
+	} else if rt > 5.0 {
+		rt = 5.0
+	}
+	p.mu.Lock()
+	p.learnedRT = 0.7*p.learnedRT + 0.3*rt
+	p.mu.Unlock()
+}
+
+func (p *LatencyPredictor) getOverhead() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.overhead
+}
+
+// ReadTimeout 动态读超时 = max(配置读超时, 预测×容差 + 10s 余量)。
+// 固定超时会被长合并块误杀——超时→重试→服务端单 worker 排队→更慢→
+// 再超时形成活锁；服务端整体变慢时实测学习的实时率抬高预测，超时跟着放宽。
+func (p *LatencyPredictor) ReadTimeout(baseSec int, d float64) int {
+	return max(baseSec, int(p.Predict(d)*p.margin)+10)
+}
