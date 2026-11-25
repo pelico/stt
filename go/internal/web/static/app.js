@@ -7,7 +7,8 @@ const fmtLag = s => s == null ? '—' : s < 60 ? Math.round(s)+'s' : s < 3600 ? 
 
 let ws = null, listening = false, liveItems = 0, logAfter = 0, logPaused = false, logTimer = null;
 let settingsCache = null, historyLimit = 100, historyKeyword = '';
-let audioCtx = null, audioBuf = [], audioPlaying = false;
+let audioCtx = null, audioBuf = [], audioPlaying = false, audioStarted = false, nextPlayTime = 0;
+const AUDIO_SR = 16000, AUDIO_CHUNK = 1920, AUDIO_PREROLL = 6400;
 
 async function api(path, opts={}) {
   const r = await fetch(path, {headers:{'Content-Type':'application/json'}, ...opts});
@@ -122,23 +123,52 @@ function toggleListen() {
   $('listen-btn').textContent = listening ? '⏹ 停止播放' : '▶ 播放';
   $('listen-btn').classList.toggle('primary', listening);
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:'listen', on:listening}));
-  if (listening && !audioCtx) initAudio();
+  if (listening) {
+    if (!audioCtx) initAudio();
+    else { audioCtx.resume(); audioPlaying = true; audioBuf = []; audioStarted = false; scheduleAudio(); }
+  } else if (audioCtx) {
+    audioPlaying = false;
+    audioBuf = [];
+    audioCtx.suspend();
+  }
 }
 
 function initAudio() {
-  audioCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+  audioCtx = new (window.AudioContext||window.webkitAudioContext)({sampleRate:AUDIO_SR});
   audioBuf = [];
-  (function schedule() {
-    if (!audioPlaying) { setTimeout(schedule, 100); return; }
-    while (audioBuf.length >= 4096) {
-      const chunk = audioBuf.splice(0, 4096);
-      const buf = audioCtx.createBuffer(1, chunk.length, 16000);
-      buf.copyToChannel(new Float32Array(chunk.map(v=>v/32768)), 0);
-      const src = audioCtx.createBufferSource(); src.buffer = buf; src.connect(audioCtx.destination); src.start();
-    }
-    setTimeout(schedule, 50);
-  })();
   audioPlaying = true;
+  audioStarted = false;
+  nextPlayTime = 0;
+  scheduleAudio();
+}
+
+// Schedule every chunk on the AudioContext clock so playback is gap-free.
+// A preroll buffer absorbs network jitter; chunks are concatenated at exact times.
+function scheduleAudio() {
+  if (!audioCtx || !audioPlaying) return;
+  if (!audioStarted) {
+    if (audioBuf.length < AUDIO_PREROLL) { setTimeout(scheduleAudio, 20); return; }
+    audioStarted = true;
+    nextPlayTime = audioCtx.currentTime + 0.05;
+  }
+  // If the timeline fell behind (tab throttled / buffer starved), resync.
+  if (nextPlayTime < audioCtx.currentTime) {
+    nextPlayTime = audioCtx.currentTime + 0.02;
+    if (audioBuf.length < AUDIO_CHUNK) { setTimeout(scheduleAudio, 20); return; }
+  }
+  while (audioBuf.length >= AUDIO_CHUNK) {
+    const chunk = audioBuf.splice(0, AUDIO_CHUNK);
+    const buf = audioCtx.createBuffer(1, chunk.length, AUDIO_SR);
+    const f32 = new Float32Array(chunk.length);
+    for (let i=0;i<chunk.length;i++) f32[i] = chunk[i] / 32768;
+    buf.copyToChannel(f32, 0);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.start(nextPlayTime);
+    nextPlayTime += chunk.length / AUDIO_SR;
+  }
+  setTimeout(scheduleAudio, 25);
 }
 
 async function toggleASR() {
