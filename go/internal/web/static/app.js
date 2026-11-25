@@ -185,7 +185,7 @@ async function fetchHealth() {
     $('asr-state').textContent = h.asr_blocked ? '熔断中' : (h.asr_enabled ? (h.asr_active ? '识别中' : '时段外') : '已暂停');
     $('asr-state').style.color = h.asr_blocked ? 'var(--red)' : (h.asr_active ? 'var(--green)' : 'var(--muted)');
     $('asr-toggle').textContent = h.asr_enabled ? '⏸ 暂停识别' : '▶ 恢复识别';
-    $('stream-state').textContent = h.stream_paused ? '时段外挂起' : (h.stream_running ? '运行中' : '未启动');
+    $('stream-state').textContent = (h.rtsp_url || '').trim() ? (h.stream_paused ? '时段外挂起' : (h.stream_running ? '运行中' : '未启动')) : '未配置音频流';
   } catch(e) {}
 }
 

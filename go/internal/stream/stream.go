@@ -90,6 +90,7 @@ type Streamer struct {
 	vadMode    int
 	vadMu      sync.Mutex
 	failStreak int
+	awaitedCfg bool
 
 	rwTimeoutOK      bool
 	wallclockOK      bool
@@ -192,6 +193,22 @@ func (s *Streamer) Start(ctx context.Context) {
 	go s.consume(ctx)
 
 	for ctx.Err() == nil {
+		// 未配置音频流地址：待机等待配置，不空转 ffmpeg 刷错误日志
+		if strings.TrimSpace(s.cb.Config.Str("rtsp_url")) == "" {
+			s.setPaused(true)
+			if !s.awaitedCfg {
+				s.cb.Log("INFO", "未配置音频流地址，待机中；请在网页设置里填写音频流地址后保存")
+				s.awaitedCfg = true
+			}
+			select {
+			case <-time.After(2 * time.Second):
+			case <-s.restartCh:
+			case <-ctx.Done():
+				return
+			}
+			continue
+		}
+		s.awaitedCfg = false
 		if s.cb.ShouldStream != nil && !s.cb.ShouldStream() {
 			s.setPaused(true)
 			select {
@@ -372,6 +389,11 @@ func (s *Streamer) buildCommand(cfg ConfigProvider) ([]string, error) {
 
 func (s *Streamer) runOnce(ctx context.Context) bool {
 	cfg := s.cb.Config
+	if strings.TrimSpace(cfg.Str("rtsp_url")) == "" {
+		s.cb.Log("WARN", "音频流地址为空，跳过本次拉流")
+		time.Sleep(2 * time.Second)
+		return false
+	}
 	args, _ := s.buildCommand(cfg)
 	ffmpegPath := cfg.Str("ffmpeg_path")
 	if ffmpegPath == "" {
