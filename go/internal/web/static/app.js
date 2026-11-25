@@ -339,11 +339,35 @@ function injectRtspHistory() {
 async function loadRtspHistory() {
   try {
     const d = await api('/api/rtsp-history');
+    const items = d.items || [];
+    // settings drawer dropdown
     const sel = $('rtsp-hist-select');
-    if (!sel) return;
-    sel.innerHTML = '<option value="">最近使用的地址…</option>' +
-      (d.items||[]).map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+    if (sel) sel.innerHTML = '<option value="">最近使用的地址…</option>' +
+      items.map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+    // dashboard stream switcher
+    const sw = $('rtsp-switch');
+    if (sw) {
+      const cur = (settingsCache?.values?.rtsp_url) || $('rtsp-url')?.textContent?.trim() || '';
+      // ensure current URL is present in the list
+      const list = cur && !items.includes(cur) ? [cur, ...items] : items;
+      sw.innerHTML = list.length
+        ? list.map(u=>`<option value="${esc(u)}" ${u===cur?'selected':''}>${esc(u)}</option>`).join('')
+        : '<option value="">暂无可用地址</option>';
+    }
   } catch(e) {}
+}
+
+async function switchStream() {
+  const url = $('rtsp-switch').value;
+  if (!url) return;
+  try {
+    await api('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rtsp_url:url})});
+    // keep settings drawer field in sync
+    const f = $('f-rtsp_url'); if (f) f.value = url;
+    toast('音频流已切换，正在重连');
+    fetchHealth();
+    loadRtspHistory();
+  } catch(e) { toast('切换失败'); }
 }
 
 async function deleteRtspHistory() {
@@ -426,13 +450,17 @@ function applyLogFilter() {
 function init() {
   connectWS(); fetchHealth(); loadHistory();
   fetchLogs(true);
-  // sync the quick threshold slider from persisted settings
+  // sync the quick threshold slider + stream switcher from persisted settings
   api('/api/settings').then(d=>{
+    settingsCache = d;
     const v = d.values?.vad_rms_dbfs;
     if (v != null) { $('live_rms').value = Math.max(-80,Math.min(-10, Math.round(v))); syncThresholdLabel(); }
+    loadRtspHistory();
   }).catch(()=>{});
   $('live_rms').addEventListener('input', syncThresholdLabel);
   $('live_rms').addEventListener('change', commitThreshold);
+  $('rtsp-switch').addEventListener('change', switchStream);
+  $('rtsp-switch-edit').onclick = openSettings;
   syncThresholdMarker();
   setInterval(fetchHealth, 5000);
   setInterval(fetchLogs, 1500);

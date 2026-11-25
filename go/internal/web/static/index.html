@@ -73,11 +73,11 @@
         <div class="card-head"><h2>VAD 状态</h2><span class="sub" id="vad-badge">静音</span></div>
         <div class="vad-panel">
           <div>
-            <div class="meter-wrap" title="拖动滑块调整能量门限：往右=更灵敏，往左=更严格（排除噪音）">
+            <div class="meter-wrap" title="拖动门限块调整能量门限：往右(-10)=要求更响、更严格(会漏字)；往左(-80)=更易触发(噪声也会进来)。一般 -45 起步">
               <div class="meter">
                 <div class="meter-fill" id="vad-level"></div>
-                <div class="threshold" id="vad-threshold"></div>
               </div>
+              <div class="threshold" id="vad-threshold"><span class="threshold-grip"></span></div>
               <input type="range" id="live_rms" min="-80" max="-10" step="1" value="-45">
             </div>
             <div class="vad-row"><span>音量电平 / 门限</span><b><span id="level_dbfs">-100</span> dBFS / <span id="live_rms_val" class="thr-val">-45 dBFS</span></b></div>
@@ -90,7 +90,14 @@
 
       <section class="card">
         <div class="card-head"><h2>连接信息</h2></div>
-        <div class="vad-row" style="margin-bottom:6px"><span>RTSP</span><b id="rtsp-url" style="max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</b></div>
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:12px;color:var(--muted)">音频流（选择即切换）</label>
+          <div class="stream-switch">
+            <select id="rtsp-switch" title="选择历史音频流，立即切换并重连"></select>
+            <button class="btn sm" id="rtsp-switch-edit" title="在设置中编辑当前地址">✎</button>
+          </div>
+          <div class="hint" id="rtsp-url" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</div>
+        </div>
         <div class="vad-row" style="margin-bottom:6px"><span>引擎</span><b id="engine-tag">—</b></div>
         <div class="vad-row" style="margin-bottom:6px"><span>识别状态</span><b id="asr-state">—</b></div>
         <div class="vad-row"><span>拉流状态</span><b id="stream-state">—</b></div>
