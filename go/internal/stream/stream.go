@@ -170,9 +170,8 @@ func (s *Streamer) Restart() {
 	case s.restartCh <- struct{}{}:
 	default:
 	}
-	if s.cancel != nil {
-		s.cancel()
-	}
+	// 不能 cancel s.cancel：那是整个 Start 循环的生命周期 context，
+	// 一取消拉流线程就永久退出。只发 restartCh，由 runCtx 监听并打断当前这一轮。
 }
 
 func (s *Streamer) Start(ctx context.Context) {
