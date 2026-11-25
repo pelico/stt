@@ -198,9 +198,37 @@ func (s *Streamer) Start(ctx context.Context) {
 		}
 		s.setPaused(false)
 
-		healthy := s.runOnce(ctx)
+		// 每次拉流用独立 context：切换音频源时立即打断阻塞中的 ffmpeg 读取，
+		// 不必等看门狗超时才重连。
+		runCtx, runCancel := context.WithCancel(ctx)
+		restarted := make(chan struct{})
+		go func() {
+			select {
+			case <-s.restartCh:
+				close(restarted)
+				runCancel()
+			case <-runCtx.Done():
+			}
+		}()
+		healthy := s.runOnce(runCtx)
+		runCancel()
 		if ctx.Err() != nil {
 			return
+		}
+		needRestart := false
+		select {
+		case <-restarted:
+			needRestart = true
+		default:
+			// 监听 goroutine 可能先选到 runCtx.Done()，把残留的切流信号补接住。
+			select {
+			case <-s.restartCh:
+				needRestart = true
+			default:
+			}
+		}
+		if needRestart {
+			continue
 		}
 		var delay time.Duration
 		if healthy {
@@ -552,12 +580,30 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 	return gotData
 }
 
+type readResult struct {
+	n   int
+	err error
+}
+
+// readFull 必须能被 context 打断：Windows 上匿名管道不支持 SetReadDeadline，
+// 而 bufio.Reader.Read 会一直阻塞，循环开头检查 ctx.Err() 救不了无数据卡死。
 func readFull(ctx context.Context, r *bufio.Reader, buf []byte) (int, error) {
+	ch := make(chan readResult, 1)
+	go func() {
+		n, err := readFullBlocking(r, buf)
+		ch <- readResult{n: n, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case res := <-ch:
+		return res.n, res.err
+	}
+}
+
+func readFullBlocking(r *bufio.Reader, buf []byte) (int, error) {
 	total := 0
 	for total < len(buf) {
-		if err := ctx.Err(); err != nil {
-			return total, err
-		}
 		n, err := r.Read(buf[total:])
 		total += n
 		if err != nil {
