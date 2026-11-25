@@ -13,16 +13,34 @@
 | 阿里云 ASR | dashscope SDK | 自研轻量 WebSocket 客户端（无 vendor SDK） |
 | 前端 | 单文件 HTML + 内联 JS | 现代化卡片布局 + 独立 CSS/JS，go:embed 内嵌 |
 
-## 运行
+## 镜像
+
+推送到 GitHub 后，Actions（`.github/workflows/ghcr-image.yml`）自动构建多架构镜像并推送到 ghcr.io：
+
+- 平台：`linux/amd64`、`linux/arm/v7`（armv7l 设备直接 pull，无需本地构建）
+- 触发：push 到 `main` / `go-rewrite`（改 `go/**` 时）、打 `v*` 标签、手动触发
+- 镜像名：`ghcr.io/<用户名>/<仓库名>`（小写），tag = 分支名 / 语义版本 / 短 SHA
+
+armv7l 设备使用：
 
 ```bash
-docker run -d --name rtsp-stt-go -p 8000:8000 \
-  -e RTSP_URL=rtsp://192.168.1.100:8554/live \
-  -e ASR_ENGINE=aliyun \
-  -e DASHSCOPE_API_KEY=sk-xxx \
-  -v $(pwd)/data:/data \
-  stt-go:latest
+docker pull ghcr.io/<用户名>/<仓库名>:go-rewrite
 ```
+
+## 运行
+
+1. 复制 `.env.example` 为 `.env`，填入音频流地址与 ASR 密钥（`.env` 不会提交到 Git）；
+2. `docker-compose.yml` 里把 `ghcr.io/OWNER/REPO` 改成实际镜像名；
+3. 启动：
+
+```bash
+docker compose up -d
+# 浏览器打开 http://<设备IP>:8000
+```
+
+音频流地址与 ASR 接口地址**不预置**在仓库/镜像中，也可以启动后在网页「设置」里填写，保存即生效。
+
+VAD/断句参数已预置实测调优值（`VAD_MODE=2`、门限 `-27 dBFS`、句首补帧 300ms、句尾保留 600ms、单段最长 20s、合并间隔 2s），开箱即可用；不同音频源可在网页设置里微调。
 
 本地开发（需本机有 ffmpeg）：
 
@@ -36,6 +54,7 @@ HTTP_PORT=8000 DB_PATH=./data/asr.db SETTINGS_PATH=./data/settings.json ./stt
 与 Python 版完全相同（见上一级目录的 README.md）。Go 版额外支持：
 - `FFMPEG_PATH`（默认 `ffmpeg`）
 - `AUDIO_DIR`（默认 `/data/audio`）
+- `ACCESS_PASSWORD`（页面访问口令，与 `ACCESS_TOKEN` 等效，也可运行时在设置里修改）
 
 ## 前端快捷入口
 

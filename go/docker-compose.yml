@@ -1,16 +1,39 @@
 services:
   stt:
-    build: .
-    image: stt-go:latest
+    # 推送到 GitHub 后，Actions 会自动构建多架构镜像到 ghcr.io
+    # 镜像名格式：ghcr.io/<你的GitHub用户名>/<仓库名>，按实际修改
+    image: ghcr.io/OWNER/REPO:latest
+    # 本地构建：注释掉 image，改用 build
+    # build: .
     container_name: rtsp-stt-go
     restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env
+        required: false   # 无 .env 也能启动，RTSP/ASR 地址可在页面设置里填
     environment:
       - TZ=Asia/Shanghai
-      - RTSP_URL=rtsp://192.168.1.100:8554/live
-      - ASR_ENGINE=aliyun
-      - DASHSCOPE_API_KEY=sk-你的key
-      # - ACCESS_TOKEN=change-me
+      # ---- 调优预设（实测稳定值，无需改动即可用）----
+      - VAD_MODE=2
+      - VAD_RMS_DBFS=-27
+      - VAD_FRAME_MS=30
+      - VAD_SILENCE_FRAMES=20
+      - VAD_MIN_SPEECH_FRAMES=8
+      - VAD_PREROLL_MS=300
+      - VAD_TAIL_PAD_MS=600
+      - VAD_MAX_SEGMENT_SEC=20
+      - ASR_MERGE_GAP_SEC=2.0
+      - ASR_MERGE_MAX_SEC=10
+      - FFMPEG_DENOISE=false
+      - FFMPEG_HIGHPASS=100
+      # ---- 以下地址/密钥不预置，请在 .env 或网页设置中填写 ----
+      # - RTSP_URL=              # 音频流地址
+      # - ASR_ENGINE=aliyun      # aliyun / tencent / openai
+      # - DASHSCOPE_API_KEY=
+      # - OPENAI_BASE_URL=       # openai 兼容接口地址
+      # - OPENAI_API_KEY=
+      # - OPENAI_MODEL=sensevoice-small
+      # - ACCESS_TOKEN=          # 页面访问口令（也可运行时在设置里改）
     volumes:
       - ./data:/data
