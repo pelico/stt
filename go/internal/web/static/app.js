@@ -256,7 +256,7 @@ function fieldHTML(name, label, type, hint, options, val) {
 function renderSettings(d) {
   settingsCache = d;
   const v = d.values || {};
-  let html = `<div class="group"><h3>访问口令</h3><div class="field"><label>状态</label><div class="vad-row"><span>${v.access_token_set ? '已启用访问口令' : '未启用访问口令'}</span><b>${v.engine_ready ? '引擎已就绪' : '引擎未就绪'}</b></div></div></div>`;
+  let html = `<div class="group"><h3>访问口令</h3><div class="field"><label>状态</label><div class="vad-row"><span>${d.access_token_set ? '已启用访问口令' : '未启用访问口令'}</span><b class="${d.engine_ready ? 'ok' : 'warn'}">${d.engine_ready ? '引擎已就绪' : '引擎未就绪'}</b></div></div></div>`;
   for (const [group, fields] of FIELDS) {
     html += `<div class="group"><h3>${esc(group)}</h3>`;
     for (const f of fields) html += fieldHTML(f[0], f[1], f[2], f[3], f[4], v[f[0]]);

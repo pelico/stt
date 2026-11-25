@@ -466,10 +466,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, 200, map[string]any{
-			"values":       s.cfg.Snapshot(true),
-			"engines":      config.Engines,
-			"engine_ready": s.cfg.EngineReady(),
-			"asr_active":   s.cfg.ASRActive(),
+			"values":           s.cfg.Snapshot(true),
+			"engines":          config.Engines,
+			"engine_ready":     s.cfg.EngineReady(),
+			"asr_active":       s.cfg.ASRActive(),
+			"access_token_set": s.settings.AccessToken != "",
 		})
 	case http.MethodPost:
 		var patch map[string]any
