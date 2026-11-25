@@ -1,4 +1,5 @@
-stt.exe
-stt-armv7
-data/
+/stt
+/stt.exe
+/stt-armv7
+/data/
 .env
