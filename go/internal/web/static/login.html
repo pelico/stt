@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · RTSP STT</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand-mark">ST</div>
+    <h1>实时语音字幕</h1>
+    <p>请输入访问口令以继续</p>
+    <form id="form">
+      <input type="password" id="password" placeholder="访问口令" autocomplete="current-password" autofocus>
+      <div class="err" id="err"></div>
+      <button class="btn primary" type="submit">登录</button>
+    </form>
+  </div>
+</div>
+<script>
+document.getElementById('form').onsubmit = async e => {
+  e.preventDefault();
+  const err = document.getElementById('err'); err.textContent = '';
+  const btn = e.target.querySelector('button'); btn.disabled = true;
+  try {
+    const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:document.getElementById('password').value})});
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) { err.textContent = d.detail || '登录失败'; return; }
+    const next = new URLSearchParams(location.search).get('next') || '/';
+    location.href = next.startsWith('/') ? next : '/';
+  } catch(ex) { err.textContent = '网络异常'; }
+  finally { btn.disabled = false; }
+};
+</script>
+</body>
+</html>

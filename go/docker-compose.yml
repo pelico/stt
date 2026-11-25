@@ -1,0 +1,16 @@
+services:
+  stt:
+    build: .
+    image: stt-go:latest
+    container_name: rtsp-stt-go
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=Asia/Shanghai
+      - RTSP_URL=rtsp://192.168.1.100:8554/live
+      - ASR_ENGINE=aliyun
+      - DASHSCOPE_API_KEY=sk-你的key
+      # - ACCESS_TOKEN=change-me
+    volumes:
+      - ./data:/data

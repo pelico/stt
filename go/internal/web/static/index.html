@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTSP STT · 实时字幕</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">ST</div>
+      <div>
+        <h1>实时语音字幕</h1>
+        <p id="engine-line">RTSP · 正在连接</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span class="status-pill"><span id="status-dot" class="dot"></span><span id="status">连接中</span></span>
+      <button class="btn" id="listen-btn">▶ 播放</button>
+      <button class="btn" id="asr-toggle">⏸ 暂停识别</button>
+      <button class="btn" id="open-logs">日志</button>
+      <button class="btn primary" id="open-settings">⚙ 设置</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <main>
+      <section class="card">
+        <div class="card-head">
+          <h2>实时字幕</h2>
+          <span class="sub" id="live-count">0 条</span>
+        </div>
+        <div class="transcript-box" id="live-content">
+          <div class="transcript-empty">
+            <div class="icon">🎙</div>
+            <div>等待语音输入…</div>
+            <div style="font-size:12px;margin-top:6px">检测到说话后自动切成一段并识别</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>运行诊断</h2><span class="sub" id="diag-summary">—</span></div>
+        <div class="metrics" id="main-diag">
+          <div class="metric"><div class="label">调用次数</div><div class="value" id="m-calls">0</div></div>
+          <div class="metric"><div class="label">成功 / 失败</div><div class="value" id="m-sr">0 / 0</div></div>
+          <div class="metric"><div class="label">最近耗时</div><div class="value" id="m-last">—</div></div>
+          <div class="metric"><div class="label">P95 耗时</div><div class="value" id="m-p95">—</div></div>
+          <div class="metric"><div class="label">队列积压</div><div class="value" id="m-backlog">0</div></div>
+          <div class="metric"><div class="label">累计入 / 出</div><div class="value" id="m-totals">0 / 0</div></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>识别历史</h2><span class="sub" id="history-total">0 条</span></div>
+        <div class="search-row">
+          <input type="text" id="search" placeholder="搜索历史字幕…">
+          <button class="btn" id="history-more">加载更多</button>
+        </div>
+        <div id="history-list"><div style="color:var(--muted);font-size:13px">暂无记录</div></div>
+      </section>
+    </main>
+
+    <aside>
+      <section class="card">
+        <div class="card-head"><h2>VAD 状态</h2><span class="sub" id="vad-badge">静音</span></div>
+        <div class="vad-panel">
+          <div>
+            <div class="meter">
+              <div class="meter-fill" id="vad-level"></div>
+              <div class="threshold" id="vad-threshold"></div>
+            </div>
+            <div class="vad-row"><span>音量电平</span><b id="live_rms">-100 dBFS</b></div>
+          </div>
+          <div class="vad-row"><span>切段 / 丢弃</span><b><span id="vad-stats">0 / 0</span></b></div>
+          <div class="vad-row"><span>处理滞后</span><b id="m-lag">0s</b></div>
+          <div class="vad-row"><span>队列模式</span><b id="queue-mode">—</b></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>连接信息</h2></div>
+        <div class="vad-row" style="margin-bottom:6px"><span>RTSP</span><b id="rtsp-url" style="max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</b></div>
+        <div class="vad-row" style="margin-bottom:6px"><span>引擎</span><b id="engine-tag">—</b></div>
+        <div class="vad-row" style="margin-bottom:6px"><span>识别状态</span><b id="asr-state">—</b></div>
+        <div class="vad-row"><span>拉流状态</span><b id="stream-state">—</b></div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<div class="drawer-mask" id="drawer-mask"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head"><h2>设置</h2><button class="btn" id="close-settings">关闭</button></div>
+  <div class="drawer-body" id="settings-form"></div>
+  <div class="drawer-foot">
+    <button class="btn" id="cancel-settings">取消</button>
+    <button class="btn primary" id="save-settings">保存并应用</button>
+  </div>
+</div>
+
+<div class="log-mask" id="log-mask"></div>
+<div class="log-panel" id="log-panel">
+  <div class="log-head">
+    <h2>运行日志</h2>
+    <div class="log-tools">
+      <select id="log-level"><option value="">全部级别</option><option>ERROR</option><option>WARN</option><option>INFO</option><option>DEBUG</option></select>
+      <input type="text" id="log-search" placeholder="过滤关键字…">
+      <button class="btn sm" id="log-pause">暂停</button>
+      <button class="btn sm" id="log-clear">清空</button>
+      <button class="btn sm" id="log-close">关闭</button>
+    </div>
+  </div>
+  <div class="log-body" id="log-body"></div>
+  <div style="padding:10px 18px;border-top:1px solid var(--border)" id="log-diag"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>
