@@ -126,7 +126,7 @@ func (s *Server) Start() {
 		OnSpeechSegment:   s.onSpeechSegment,
 		OnVADState:        func(st stream.State) { s.broadcast(st) },
 		OnAudioFrame:      func(frame []byte) { s.broadcastAudio(frame) },
-		ShouldStream:      func() bool { return s.cfg.InSchedule() },
+		ShouldStream:      func() bool { return s.cfg.Bool("stream_enabled") && s.cfg.InSchedule() },
 		OnStreamState:     func(paused bool) { s.broadcast(map[string]any{"type": "stream", "paused": paused}) },
 		OnRejectedSegment: func(pcm []byte, reason string) { s.dumpRejected(pcm, "vad-"+reason) },
 		Log:               s.log,
@@ -592,6 +592,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"status": "ok", "rtsp_url": s.cfg.Str("rtsp_url"), "asr_engine": s.cfg.Str("asr_engine"),
 		"engine_ready": s.cfg.EngineReady(), "asr_enabled": s.cfg.Bool("asr_enabled"),
+		"stream_enabled": s.cfg.Bool("stream_enabled"),
 		"asr_schedule_enabled": s.cfg.Bool("asr_schedule_enabled"),
 		"asr_start_time":       s.cfg.Str("asr_start_time"), "asr_end_time": s.cfg.Str("asr_end_time"),
 		"asr_active": s.cfg.ASRActive(), "asr_blocked": blocked,

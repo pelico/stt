@@ -63,6 +63,7 @@ type Settings struct {
 	SaveRejectedAudio  bool
 	RejectedAudioMax   int
 	ASREnabled         bool
+	StreamEnabled      bool
 	ASRScheduleEnabled bool
 	ASRStartTime       string
 	ASREndTime         string
@@ -166,6 +167,7 @@ func LoadSettings() *Settings {
 		SaveRejectedAudio:  envBool("SAVE_REJECTED_AUDIO", false),
 		RejectedAudioMax:   envInt("REJECTED_AUDIO_MAX", 50),
 		ASREnabled:         envBool("ASR_ENABLED", true),
+		StreamEnabled:      envBool("STREAM_ENABLED", true),
 		ASRScheduleEnabled: envBool("ASR_SCHEDULE_ENABLED", false),
 		ASRStartTime:       env("ASR_START_TIME", "08:00"),
 		ASREndTime:         env("ASR_END_TIME", "22:00"),
@@ -213,6 +215,7 @@ var fieldTypes = map[string]FieldType{
 	"filter_noise_text": TypeBool, "filter_ignore_words": TypeString,
 	"save_rejected_audio": TypeBool, "asr_enabled": TypeBool,
 	"asr_schedule_enabled": TypeBool, "asr_start_time": TypeString, "asr_end_time": TypeString,
+	"stream_enabled": TypeBool,
 	"ffmpeg_denoise": TypeBool,
 }
 
@@ -248,6 +251,7 @@ func defaults(s *Settings) map[string]any {
 		"filter_noise_text": s.FilterNoiseText, "filter_ignore_words": s.FilterIgnoreWords,
 		"save_rejected_audio": s.SaveRejectedAudio, "asr_enabled": s.ASREnabled,
 		"asr_schedule_enabled": s.ASRScheduleEnabled, "asr_start_time": s.ASRStartTime,
+		"stream_enabled": s.StreamEnabled,
 		"asr_end_time": s.ASREndTime,
 	}
 }

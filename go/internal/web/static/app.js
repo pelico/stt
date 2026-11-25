@@ -185,7 +185,8 @@ async function fetchHealth() {
     $('asr-state').textContent = h.asr_blocked ? '熔断中' : (h.asr_enabled ? (h.asr_active ? '识别中' : '时段外') : '已暂停');
     $('asr-state').style.color = h.asr_blocked ? 'var(--red)' : (h.asr_active ? 'var(--green)' : 'var(--muted)');
     $('asr-toggle').textContent = h.asr_enabled ? '⏸ 暂停识别' : '▶ 恢复识别';
-    $('stream-state').textContent = (h.rtsp_url || '').trim() ? (h.stream_paused ? '时段外挂起' : (h.stream_running ? '运行中' : '未启动')) : '未配置音频流';
+    $('stream-toggle').textContent = h.stream_enabled ? '⏸ 停止拉流' : '▶ 开启拉流';
+    $('stream-state').textContent = !(h.rtsp_url || '').trim() ? '未配置音频流' : (!h.stream_enabled ? '已手动停止' : (h.stream_paused ? '时段外挂起' : (h.stream_running ? '运行中' : '未启动')));
   } catch(e) {}
 }
 
@@ -274,6 +275,15 @@ async function toggleASR() {
   const next = !cur.values.asr_enabled;
   await api('/api/settings', {method:'POST', body:JSON.stringify({asr_enabled:next})});
   toast(next ? '识别已恢复' : '识别已暂停');
+  fetchHealth();
+}
+
+async function toggleStream() {
+  const cur = await api('/api/settings').catch(()=>null);
+  if (!cur) return;
+  const next = !cur.values.stream_enabled;
+  await api('/api/settings', {method:'POST', body:JSON.stringify({stream_enabled:next})});
+  toast(next ? '拉流已开启' : '拉流已停止');
   fetchHealth();
 }
 
@@ -535,6 +545,7 @@ function init() {
   setInterval(fetchLogs, 1500);
   $('listen-btn').onclick = toggleListen;
   $('asr-toggle').onclick = toggleASR;
+  $('stream-toggle').onclick = toggleStream;
   $('open-settings').onclick = openSettings;
   $('close-settings').onclick = closeSettings;
   $('cancel-settings').onclick = closeSettings;
