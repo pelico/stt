@@ -339,7 +339,10 @@ func (s *Streamer) buildCommand(cfg ConfigProvider) ([]string, error) {
 func (s *Streamer) runOnce(ctx context.Context) bool {
 	cfg := s.cb.Config
 	args, _ := s.buildCommand(cfg)
-	ffmpegPath := "ffmpeg"
+	ffmpegPath := cfg.Str("ffmpeg_path")
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
 	s.cb.Log("INFO", "启动 ffmpeg: %s %s", ffmpegPath, strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	stdout, err := cmd.StdoutPipe()
