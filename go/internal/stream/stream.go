@@ -401,6 +401,7 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 	recentLevels := []float64{}
 	lastEmit := time.Time{}
 	lastSpeech := false
+	vadErrLogged := false
 
 	for ctx.Err() == nil {
 		if s.cb.ShouldStream != nil && !s.cb.ShouldStream() {
@@ -439,10 +440,16 @@ func (s *Streamer) runOnce(ctx context.Context) bool {
 			vad, verr := s.getVAD()
 			vadSpeech := false
 			if verr == nil {
-				vadSpeech, verr = webrtcvad.Process(vad, sampleRate, f, frameBytes)
+				// Process expects the frame length in SAMPLES, not bytes.
+				// The library multiplies by 2 internally for 16-bit PCM.
+				vadSpeech, verr = webrtcvad.Process(vad, sampleRate, f, frameBytes/2)
 			}
 			if verr != nil {
 				vadSpeech = false
+				if !vadErrLogged {
+					s.cb.Log("ERROR", "VAD 处理失败: %v", verr)
+					vadErrLogged = true
+				}
 			}
 			isSpeech := vadSpeech && level >= rmsLimit
 
