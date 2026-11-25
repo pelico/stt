@@ -73,11 +73,14 @@
         <div class="card-head"><h2>VAD 状态</h2><span class="sub" id="vad-badge">静音</span></div>
         <div class="vad-panel">
           <div>
-            <div class="meter">
-              <div class="meter-fill" id="vad-level"></div>
-              <div class="threshold" id="vad-threshold"></div>
+            <div class="meter-wrap" title="拖动滑块调整能量门限：往右=更灵敏，往左=更严格（排除噪音）">
+              <div class="meter">
+                <div class="meter-fill" id="vad-level"></div>
+                <div class="threshold" id="vad-threshold"></div>
+              </div>
+              <input type="range" id="live_rms" min="-80" max="-10" step="1" value="-45">
             </div>
-            <div class="vad-row"><span>音量电平</span><b id="live_rms">-100 dBFS</b></div>
+            <div class="vad-row"><span>音量电平 / 门限</span><b><span id="level_dbfs">-100</span> dBFS / <span id="live_rms_val" class="thr-val">-45 dBFS</span></b></div>
           </div>
           <div class="vad-row"><span>切段 / 丢弃</span><b><span id="vad-stats">0 / 0</span></b></div>
           <div class="vad-row"><span>处理滞后</span><b id="m-lag">0s</b></div>

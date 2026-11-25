@@ -61,6 +61,7 @@ function onTranscript(m) {
   // newest first: prepend instead of append, keep viewport at top
   box.insertBefore(div, box.firstChild);
   box.scrollTop = 0;
+  while (box.children.length > 30) box.removeChild(box.lastChild);
   liveItems++; $('live-count').textContent = liveItems+' 条';
   setTimeout(()=>div.classList.remove('new'), 1500);
   // keep the history panel in sync only when viewing the newest page unfiltered
@@ -79,7 +80,7 @@ function transcriptItem(m) {
 function onVAD(m) {
   const pct = Math.max(0, Math.min(100, (m.level + 60) / 60 * 100));
   $('vad-level').style.width = pct+'%';
-  $('live_rms').textContent = m.level.toFixed(1)+' dBFS';
+  $('level_dbfs').textContent = m.level.toFixed(1);
   $('vad-badge').textContent = m.active ? '语音中' : (m.speech ? '检测到语音' : '静音');
   $('vad-badge').style.color = m.active ? 'var(--green)' : 'var(--muted)';
   $('vad-stats').textContent = m.segments+' / '+m.dropped;
@@ -87,6 +88,29 @@ function onVAD(m) {
   $('queue-mode').textContent = m.mode === 'durable' ? '完整优先' : '实时优先';
   $('m-backlog').textContent = m.backlog;
   $('m-totals').textContent = (m.enq||0)+' / '+(m.deq||0);
+}
+
+// Energy threshold: meter level uses [-60,0] -> 0..100%; threshold domain [-80,-10]
+// must be mapped to the same coordinate system so the marker lines up with the meter.
+function thresholdPct(v) { return Math.max(0, Math.min(100, ((v+60)/60)*100)); }
+function syncThresholdMarker() {
+  const el = $('vad-threshold');
+  if (el) el.style.left = thresholdPct(parseInt($('live_rms').value,10))+'%';
+}
+function syncThresholdLabel() {
+  const v = $('live_rms').value;
+  $('live_rms_val').textContent = v+' dBFS';
+  syncThresholdMarker();
+}
+async function commitThreshold() {
+  const value = parseInt($('live_rms').value,10);
+  try {
+    await api('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({vad_rms_dbfs:value})});
+    // keep the settings drawer field in sync with this quick slider
+    const f = $('f-vad_rms_dbfs');
+    if (f) { f.value = value; const b=$('f-vad_rms_dbfs-v'); if (b) b.textContent = value; }
+    toast('能量门限已设为 '+value+' dBFS');
+  } catch(e) { toast('门限保存失败'); }
 }
 
 async function fetchHealth() {
@@ -285,8 +309,53 @@ function renderSettings(d) {
   }
   $('settings-form').innerHTML = html;
   $('settings-form').querySelectorAll('input[type=range]').forEach(el=>{
-    el.addEventListener('input', ()=>{ const b=$(el.id+'-v'); if(b) b.textContent = el.value; });
+    el.addEventListener('input', ()=>{
+      const b=$(el.id+'-v'); if(b) b.textContent = el.value;
+      // two-way sync between drawer field and quick slider for the same setting
+      if (el.id === 'f-vad_rms_dbfs') {
+        $('live_rms').value = el.value; syncThresholdLabel();
+      }
+    });
   });
+  injectRtspHistory();
+}
+
+// RTSP address history: dropdown + delete, backed by /api/rtsp-history.
+function injectRtspHistory() {
+  const input = $('f-rtsp_url');
+  if (!input) return;
+  const field = input.closest('.field');
+  if (!field || $('rtsp-hist-row')) return;
+  const row = document.createElement('div');
+  row.id = 'rtsp-hist-row';
+  row.className = 'rtsp-hist-row';
+  row.innerHTML = `<select id="rtsp-hist-select"><option value="">最近使用的地址…</option></select><button class="btn sm danger" id="rtsp-hist-del" title="删除选中的历史地址">删除</button>`;
+  field.appendChild(row);
+  $('rtsp-hist-select').onchange = e => { if (e.target.value) { input.value = e.target.value; e.target.value=''; } };
+  $('rtsp-hist-del').onclick = deleteRtspHistory;
+  loadRtspHistory();
+}
+
+async function loadRtspHistory() {
+  try {
+    const d = await api('/api/rtsp-history');
+    const sel = $('rtsp-hist-select');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">最近使用的地址…</option>' +
+      (d.items||[]).map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+  } catch(e) {}
+}
+
+async function deleteRtspHistory() {
+  const sel = $('rtsp-hist-select');
+  if (!sel || !sel.value) { toast('请先在下拉框选择要删除的地址'); return; }
+  const url = sel.value;
+  if (!confirm('确定删除这条历史地址？\n\n'+url)) return;
+  try {
+    await api('/api/rtsp-history?url='+encodeURIComponent(url), {method:'DELETE'});
+    await loadRtspHistory();
+    toast('已删除历史地址');
+  } catch(e) { toast('删除失败'); }
 }
 
 async function openSettings() {
@@ -357,6 +426,14 @@ function applyLogFilter() {
 function init() {
   connectWS(); fetchHealth(); loadHistory();
   fetchLogs(true);
+  // sync the quick threshold slider from persisted settings
+  api('/api/settings').then(d=>{
+    const v = d.values?.vad_rms_dbfs;
+    if (v != null) { $('live_rms').value = Math.max(-80,Math.min(-10, Math.round(v))); syncThresholdLabel(); }
+  }).catch(()=>{});
+  $('live_rms').addEventListener('input', syncThresholdLabel);
+  $('live_rms').addEventListener('change', commitThreshold);
+  syncThresholdMarker();
   setInterval(fetchHealth, 5000);
   setInterval(fetchLogs, 1500);
   $('listen-btn').onclick = toggleListen;
