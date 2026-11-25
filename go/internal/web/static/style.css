@@ -67,6 +67,7 @@ a { color: var(--accent); text-decoration: none; }
   padding: 8px 14px; border-radius: 9px;
   border: 1px solid var(--border); background: var(--surface);
   font-size: 13px; font-weight: 500; transition: .15s;
+  flex: none; white-space: nowrap;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
