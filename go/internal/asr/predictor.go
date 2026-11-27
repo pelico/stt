@@ -22,10 +22,16 @@ type LatencyPredictor struct {
 	mu        sync.Mutex
 	cfgRT     float64
 	learnedRT float64
+	samples   int // 成功样本数；攒够 warmupSamples 后实测值接管预测
 	overhead  float64
 	margin    float64
 	slowSec   float64
 }
+
+// warmupSamples 冷启动样本数：之前学习值只抬高不降低（max 保护），
+// 但配置兜底 rt（1.5）远高于快服务实测值时预测虚高数倍。
+// 攒够样本后改由实测 EMA 接管，配置值仅作冷启动先验。
+const warmupSamples = 5
 
 // NewLatencyPredictor 从配置构造；缺省值与 Python 版一致。
 func NewLatencyPredictor(cfg Config) *LatencyPredictor {
@@ -51,16 +57,25 @@ func NewLatencyPredictor(cfg Config) *LatencyPredictor {
 	}
 }
 
+// effectiveRT 冷启动期用 max(配置, 学习) 保守兜底；样本攒够后由学习值接管，
+// 服务真变慢时 EMA（0.3 权重）3~5 个请求内就会把 rt 抬回去。
+func (p *LatencyPredictor) effectiveRT() float64 {
+	if p.samples >= warmupSamples {
+		return p.learnedRT
+	}
+	return max(p.cfgRT, p.learnedRT)
+}
+
 func (p *LatencyPredictor) Predict(d float64) float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return max(d*p.cfgRT, d*p.learnedRT) + p.overhead
+	return d*p.effectiveRT() + p.overhead
 }
 
 func (p *LatencyPredictor) SlowThreshold(d float64) float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return max(p.slowSec, (max(d*p.cfgRT, d*p.learnedRT)+p.overhead)*p.margin)
+	return max(p.slowSec, (d*p.effectiveRT()+p.overhead)*p.margin)
 }
 
 func (p *LatencyPredictor) LearnedRT() float64 {
@@ -74,13 +89,16 @@ func (p *LatencyPredictor) Observe(latencySec, durationSec float64) {
 		return
 	}
 	rt := (latencySec - p.getOverhead()) / durationSec
-	if rt < 0.1 {
-		rt = 0.1
+	// 下限 0.05：快服务（SenseVoice 本地/内网）延迟常低于固定开销，
+	// 扣完为负说明 rt 接近 0，钳太严（0.1）会让学习值收敛偏高。
+	if rt < 0.05 {
+		rt = 0.05
 	} else if rt > 5.0 {
 		rt = 5.0
 	}
 	p.mu.Lock()
 	p.learnedRT = 0.7*p.learnedRT + 0.3*rt
+	p.samples++
 	p.mu.Unlock()
 }
 
