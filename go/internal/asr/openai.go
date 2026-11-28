@@ -101,7 +101,8 @@ func (o *OpenAI) Recognize(pcm []byte) (string, error) {
 }
 
 // SlowPredictor 接口实现：供 Server 记录预测日志与慢请求告警。
-func (o *OpenAI) Predict(d float64) float64       { return o.pred.Predict(d) }
-func (o *OpenAI) SlowThreshold(d float64) float64 { return o.pred.SlowThreshold(d) }
-func (o *OpenAI) LearnedRT() float64              { return o.pred.LearnedRT() }
-func (o *OpenAI) Observe(lat, d float64)          { o.pred.Observe(lat, d) }
+func (o *OpenAI) Predict(d float64) float64        { return o.pred.Predict(d) }
+func (o *OpenAI) SlowThreshold(d float64) float64  { return o.pred.SlowThreshold(d) }
+func (o *OpenAI) LearnedRT() float64               { return o.pred.LearnedRT() }
+func (o *OpenAI) LearnedOverhead() float64         { return o.pred.LearnedOverhead() }
+func (o *OpenAI) Observe(lat, d float64)           { o.pred.Observe(lat, d) }

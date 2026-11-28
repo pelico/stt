@@ -67,12 +67,32 @@ func TestPredictorAdaptsToSlowdown(t *testing.T) {
 	}
 }
 
-// 3s 以下片段不参与学习，避免比例失真。
+// 1s 以下片段不参与学习（EMA/回归都不要）；1s 以上正常计入。
 func TestPredictorIgnoresShortAudio(t *testing.T) {
 	p := NewLatencyPredictor(testConfig())
+	p.Observe(0.2, 0.5)
+	if p.samples != 0 || len(p.win) != 0 {
+		t.Fatalf("0.5s 音频不应参与学习, samples=%d win=%d", p.samples, len(p.win))
+	}
 	p.Observe(0.5, 1.5)
-	if p.samples != 0 {
-		t.Fatalf("短音频不应计入样本, samples = %d", p.samples)
+	if p.samples != 1 || len(p.win) != 1 {
+		t.Fatalf("1.5s 音频应计入学习, samples=%d win=%d", p.samples, len(p.win))
+	}
+}
+
+// 开销动态学习：延迟 = 0.2×时长 + 0.5 的服务，
+// 回归应恢复截距 ≈0.5（而非固定 3s），预测贴近真实值。
+func TestPredictorLearnsOverhead(t *testing.T) {
+	p := NewLatencyPredictor(testConfig())
+	durs := []float64{2, 4, 6, 8, 10, 3, 5, 7, 9, 2.5}
+	for _, d := range durs {
+		p.Observe(0.2*d+0.5, d)
+	}
+	if oh := p.LearnedOverhead(); math.Abs(oh-0.5) > 0.15 {
+		t.Fatalf("学习开销 = %v, 期望 ≈ 0.5", oh)
+	}
+	if got := p.Predict(8.0); math.Abs(got-2.1) > 0.3 {
+		t.Fatalf("预测 = %v, 期望 ≈ 2.1 (8×0.2+0.5)，固定 3s 开销未被动态学习替代", got)
 	}
 }
 

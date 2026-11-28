@@ -234,8 +234,8 @@ func (s *Server) onSpeechSegment(pcm []byte, wallISO string) bool {
 	var predicted float64
 	if pred != nil {
 		predicted = pred.Predict(audioSec)
-		s.log("INFO", "[ASR] req#%d ASR请求 | 音频 %.1fs/%dKB | 预测 %.1fs(rt=%.2f)",
-			reqID, audioSec, len(pcm)/1024, predicted, pred.LearnedRT())
+		s.log("INFO", "[ASR] req#%d ASR请求 | 音频 %.1fs/%dKB | 预测 %.1fs(rt=%.2f, 开销=%.1fs)",
+			reqID, audioSec, len(pcm)/1024, predicted, pred.LearnedRT(), pred.LearnedOverhead())
 	}
 	text, err := engine.Recognize(pcm)
 	latency := time.Since(started).Seconds()
@@ -583,10 +583,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.settings.LogFileEnabled {
 		logFile = s.settings.LogFilePath
 	}
-	learnedRT := -1.0
+	learnedRT, learnedOH := -1.0, -1.0
 	s.engineMu.Lock()
 	if sp, ok := s.engine.(asr.SlowPredictor); ok {
 		learnedRT = sp.LearnedRT()
+		learnedOH = sp.LearnedOverhead()
 	}
 	s.engineMu.Unlock()
 	writeJSON(w, 200, map[string]any{
@@ -601,7 +602,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"queue_backlog_bytes": backlogBytes, "queue_lag_sec": lag,
 		"queue_totals": totals, "diagnostics": s.metrics.Snapshot(),
 		"asr_timeout": s.settings.ASRTimeout, "asr_connect_timeout": s.settings.ASRConnectTimeout,
-		"asr_learned_rt": learnedRT,
+		"asr_learned_rt": learnedRT, "asr_learned_overhead": learnedOH,
 		"asr_slow_ms": s.settings.ASRSlowMS, "log_file": logFile,
 	})
 }

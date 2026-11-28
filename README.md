@@ -105,7 +105,7 @@ Web 设置保存在 `/data/settings.json`（容器内），因此 `-v ./data:/da
 | `ASR_TIMEOUT` | `45` | 读取超时（秒）：服务端算得慢时的等待上限 |
 | `ASR_CONNECT_TIMEOUT` | `10` | 连接超时（秒）：与读取超时分开，异常能区分「连不上」和「算得慢」 |
 | `ASR_SLOW_MS` | `10000` | 慢请求固定基线（毫秒），仅对短音频生效 |
-| `ASR_SLOW_RT_FACTOR` / `ASR_SLOW_OVERHEAD_SEC` | `1.5` / `3.0` | 慢请求动态预测：预计耗时 = 音频时长 × 实时率 + 固定开销；实时率按成功请求实测自学习（EMA） |
+| `ASR_SLOW_RT_FACTOR` / `ASR_SLOW_OVERHEAD_SEC` | `1.5` / `3.0` | 慢请求动态预测：预计耗时 = 音频时长 × 实时率 + 开销。两者均自学习：最近 20 次请求做线性回归（斜率=实时率、截距=开销），样本不足时退回 EMA + 此处配置值兜底 |
 | `ASR_SLOW_MARGIN` | `1.3` | 实际耗时超过 预测值 × 该容差 才打「慢请求」WARNING |
 | `LOG_FILE_ENABLED` | `true` | 运行日志轮转落盘（页面内存缓冲重启即清空，事后排查靠文件） |
 | `LOG_FILE_PATH` | `/data/logs/stt.log` | 日志文件路径，位于持久化卷内 |
